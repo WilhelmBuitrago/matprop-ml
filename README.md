@@ -15,7 +15,6 @@ The project implements a complete workflow:
 2. Graph construction from CIF structures (MEGNet baseline, ALIGNN optional).
 3. Training and validation pipelines for each property.
 4. Model export and inference from a unified API.
-
-Minimal user interface for submitting structures and visualizing predictions.
+5. Minimal user interface for submitting structures and visualizing predictions.
 
 The primary goal is to deliver a functional MVP for materials property prediction, with emphasis on clarity, reproducibility and modular design. Future extensions include ALIGNN+ (with global-state support), spectral-property prediction, RAG-assisted querying, and structure generation.
