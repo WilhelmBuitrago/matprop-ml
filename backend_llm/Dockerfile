@@ -12,7 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY src/ /app/
-
+RUN mkdir -p /app/conversation_cache \
+    && chmod -R 777 /app/conversation_cache
 EXPOSE 8001
 
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8001", "--proxy-headers"]
