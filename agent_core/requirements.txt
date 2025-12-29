@@ -1,0 +1,5 @@
+fastapi
+uvicorn[standard]
+#langchain
+# Recomendado: especificar versiones en producción para reproducibilidad
+# e.g. transformers>=4.35.2, accelerate>=0.22.0, bitsandbytes>=0.39.0
