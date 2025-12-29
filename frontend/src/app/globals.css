@@ -1,0 +1,20 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family: "Inter", "Segoe UI", Tahoma, Geneva, sans-serif;
+  color: #fdfdfd;
+  background-color: #050505;
+}
+
+button {
+  font-family: inherit;
+}

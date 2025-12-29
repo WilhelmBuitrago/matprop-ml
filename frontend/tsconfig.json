@@ -1,0 +1,15 @@
+{
+	"compilerOptions": {
+		"target": "es2019",
+		"module": "node16",
+		"jsx": "preserve",
+		"moduleResolution": "node16",
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"resolveJsonModule": true,
+		"skipLibCheck": true,
+		"noEmit": true
+	},
+	"include": ["**/*.ts", "**/*.tsx"],
+	"exclude": ["node_modules"]
+}
