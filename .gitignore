@@ -209,5 +209,8 @@ __marimo__/
 
 
 *.cif
-
 data/
+node_modules/
+.next/
+npm-debug.log
+llamat2-chat/
