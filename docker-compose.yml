@@ -1,6 +1,50 @@
-version: "3.9"
+#version: "3.9"
 
 services:
+  agent-core:
+    build:
+      context: ./agent_core
+      dockerfile: Dockerfile
+    container_name: agent-core
+    env_file: .env
+    ports:
+      - "${AGENT_CORE_PORT}:8004"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8004/v1/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - matprop_net
+  agents:
+      build:
+        context: ./agents
+        dockerfile: Dockerfile
+      container_name: agents
+      env_file: .env
+      ports:
+        - "${AGENT_POLCY_MODEL_PORT}:8003"
+      restart: unless-stopped
+      volumes:
+        - ollama_data:/root/.ollama
+      depends_on:
+        - agent-core
+      healthcheck:
+        test: ["CMD-SHELL", "curl -f http://localhost:8003/v1/health || exit 1"]
+        interval: 30s
+        timeout: 5s
+        retries: 3
+      deploy:
+        resources:
+          reservations:
+            devices:
+              - driver: nvidia
+                count: all
+                capabilities: [gpu]
+      networks:
+        - matprop_net
+
   #backend-ml:
   #  build:
   #    context: ./backend_ml
@@ -30,8 +74,8 @@ services:
       - "${BACKEND_LLM_PORT}:8001"
     volumes:
       - ./backend_llm/src:/app:ro
-    depends_on:
-      - llamat2-chat
+    #depends_on:
+      #- llamat2-chat
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8001/v1/health || exit 1"]
@@ -70,15 +114,27 @@ services:
     networks:
       - matprop_net
   frontend:
-      build: ./frontend
-      container_name: frontend
-      ports:
-        - "${FRONTEND_PORT}:3000"
-      depends_on:
-        - llm_service
-      networks:
-        - matprop_net
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: "http://localhost:8001"
+        INTERNAL_API_URL: "http://backend-llm:8001"
+    container_name: frontend
+    ports:
+      - "${FRONTEND_PORT}:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: "http://localhost:8001"
+      INTERNAL_API_URL: "http://backend-llm:8001"
+    depends_on:
+      - backend-llm
+    networks:
+      - matprop_net
 
 networks:
-  default:
-    name: matprop_net
+  matprop_net:
+    driver: bridge
+
+
+volumes:
+  ollama_data:
