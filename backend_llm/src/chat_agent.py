@@ -13,17 +13,23 @@ from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 import hashlib
+import logging
+
+# Logger
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO)
 
 
 @dataclass
 class ChatConfig:
     """Configuration for chat agent"""
 
-    model_endpoint: str = "http://localhost:8000/v1/completions"
+    model_endpoint: str = "http://agent-policy-ollama:8000/v1/completions"
     model_name: str = "model_path_used_during_hosting_by_vllm_serve"
     temperature: float = 0.7
     max_tokens: int = 512
-    max_context_tokens: int = 3000  # Token limit for context management
+    max_context_tokens: int = 2096  # Token limit for context management
     cache_dir: str = "cache"
     system_prompt: str = """You are a materials science expert assistant. You have deep knowledge of:
 - Materials chemistry and physics
@@ -125,26 +131,26 @@ class ChatAgent:
     def _call_model(self, messages: List[Dict[str, str]]) -> str:
         """Call the local model API"""
         # Convert messages to a single prompt for completions endpoint
-        prompt = ""
+        history = []
         for message in messages:
             if message["role"] == "system":
-                prompt += f"System: {message['content']}\n\n"
+                history.append({"role": "system", "content": message["content"]})
             elif message["role"] == "user":
-                prompt += f"User: {message['content']}\n\n"
+                history.append({"role": "user", "content": message["content"]})
             elif message["role"] == "assistant":
-                prompt += f"Assistant: {message['content']}\n\n"
+                history.append({"role": "assistant", "content": message["content"]})
 
         # Improved prompt to get concise, direct responses
-        prompt += """Assistant:"""
-
+        # prompt += """Assistant:"""
+        # logger.info(f"Constructed prompt for model: {history}")
         payload = {
-            "model": self.config.model_name,
-            "prompt": prompt,
+            "prompt": history,
             "temperature": self.config.temperature,
-            "max_tokens": min(self.config.max_tokens, 200),  # Limit response length
-            "stop": ["\n\nUser:", "\n\nAssistant:", "User:", "Assistant:"],
+            "max_tokens": min(self.config.max_tokens, 512),  # Limit response length
+            # "stop": ["\n\nUser:", "\n\nAssistant:", "User:", "Assistant:"],
         }
 
+        # logger.info(f"Sending payload to model endpoint: {payload}")
         try:
             response = requests.post(
                 self.config.model_endpoint,
@@ -152,6 +158,8 @@ class ChatAgent:
                 headers={"Content-Type": "application/json"},
                 timeout=60,
             )
+            # logger.info(f"Model response status code: {response.status_code}")
+            # logger.info(f"Model response content: {response.text}")
             response.raise_for_status()
 
             result = response.json()
@@ -219,18 +227,21 @@ class ChatAgent:
         Returns:
             Assistant's response
         """
+        # logger.info(f"User message: {user_message}")
         # Add user message to history
         self.conversation_history.append({"role": "user", "content": user_message})
-
+        # logger.info(f"Updated conversation history: {self.conversation_history}")
         # Update token count
         self.current_tokens += self._estimate_tokens(user_message)
-
+        # logger.info(f"Current tokens after user message: {self.current_tokens}")
         # Manage context if needed
         self._manage_context()
 
         try:
             # Get response from model
+            # logger.info("Calling model for response...")
             response = self._call_model(self.conversation_history)
+            # logger.info(f"Model response: {response}")
 
             # Add assistant response to history
             self.conversation_history.append({"role": "assistant", "content": response})
