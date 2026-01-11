@@ -8,6 +8,12 @@ class CompletionRequest(BaseModel):
     max_tokens: int = 512
 
 
+class InstructRequest(BaseModel):
+    prompt: str
+    temperature: float = 0.7
+    max_tokens: int = 512
+
+
 class PlanStep(BaseModel):
     tool: str
     arguments: Dict[str, Any]

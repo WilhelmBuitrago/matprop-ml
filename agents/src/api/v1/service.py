@@ -87,11 +87,13 @@ class ChatService:
             ),
         }
         try:
+            logger.info(f"menssages: {request.history}")
             response = ollama.chat(
                 model=self.name,
                 messages=request.history,
                 options=options,
             )
+            logger.info(f"Chat model response: {response['message']['content']}")
             return response["message"]["content"]
         except Exception as e:
             raise RuntimeError(f"Chat model invocation failed: {e}") from e
