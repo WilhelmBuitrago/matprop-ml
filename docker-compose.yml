@@ -24,7 +24,7 @@ services:
       container_name: agents
       env_file: .env
       ports:
-        - "${AGENT_POLCY_MODEL_PORT}:8003"
+        - "${AGENTS_PORT}:8003"
       restart: unless-stopped
       volumes:
         - ollama_data:/root/.ollama
@@ -86,48 +86,45 @@ services:
       - matprop_net
 
 
-  llamat2-chat:
-    build:
-      context: ./llamat2-chat
-      dockerfile: Dockerfile
-    container_name: llamat2-chat
-    env_file: .env
-    ports:
-      - "${LLAMAT2_CHAT_PORT}:8002"
-
+  #llamat2-chat:
+  #  build:
+  #    context: ./llamat2-chat
+  #    dockerfile: Dockerfile
+  #  container_name: llamat2-chat
+  #  env_file: .env
+  #  ports:
+  #    - "${LLAMAT2_CHAT_PORT}:8002"
     # Soporte GPU si existe (NVIDIA runtime)
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
-    restart: unless-stopped
-
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8002/v1/health || exit 1"]
-      interval: 20s
-      timeout: 5s
-      retries: 5
-    networks:
-      - matprop_net
+  #  deploy:
+  #    resources:
+  #      reservations:
+  #        devices:
+  #          - driver: nvidia
+  #            count: all
+  #            capabilities: [gpu]
+  #  restart: unless-stopped
+  #  healthcheck:
+  #    test: ["CMD-SHELL", "curl -f http://localhost:8002/v1/health || exit 1"]
+  #    interval: 20s
+  #    timeout: 5s
+  #    retries: 5
+  #  networks:
+  #    - matprop_net
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: "http://localhost:8001"
-        INTERNAL_API_URL: "http://backend-llm:8001"
+        NEXT_PUBLIC_API_URL: "http://localhost:8004"
+        INTERNAL_API_URL: "http://agent-core:8004"
     container_name: frontend
     ports:
       - "${FRONTEND_PORT}:3000"
     environment:
-      NEXT_PUBLIC_API_URL: "http://localhost:8001"
-      INTERNAL_API_URL: "http://backend-llm:8001"
+      NEXT_PUBLIC_API_URL: "http://localhost:8004"
+      INTERNAL_API_URL: "http://agent-core:8004"
     depends_on:
-      - backend-llm
+      - agent-core
     networks:
       - matprop_net
 
