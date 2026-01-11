@@ -1,5 +1,9 @@
 fastapi
 uvicorn[standard]
+requests
+pydantic
+pymatgen==2024.7.18
+mp_api==0.45.13
 #langchain
 # Recomendado: especificar versiones en producción para reproducibilidad
 # e.g. transformers>=4.35.2, accelerate>=0.22.0, bitsandbytes>=0.39.0

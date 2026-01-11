@@ -3,76 +3,137 @@ AVAILABLES_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "search_materials_by_id",
-            "description": "Search for materials using their unique identifiers.",
+            "name": "search_materials",
+            "description": "Search for materials in the database based on various criteria.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "material_ids": {
-                        "oneOf": [
-                            {
-                                "type": "integer",
-                                "description": "Single material unique identifier",
-                            },
-                            {
-                                "type": "array",
-                                "items": {"type": "integer"},
-                                "description": "List of material unique identifiers",
-                            },
-                        ]
-                    }
-                },
-                "required": ["material_ids"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_materials_by_keyword",
-            "description": "Search for materials using keywords.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "keywords": {
-                        "oneOf": [
-                            {
-                                "type": "string",
-                                "description": "Single keyword for material search",
-                            },
-                            {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "List of keywords for material search",
-                            },
-                        ]
-                    }
-                },
-                "required": ["keywords"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_materials_by_structure",
-            "description": "Search for materials using structural information.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "structure_data": {
+                    "query": {
                         "type": "object",
+                        "description": "Search criteria for materials (e.g., material_id, formula, chemsys)",
                         "properties": {
-                            "format": {"enum": ["cif", "poscar"]},
-                            "data": {"type": "string"},
+                            "material": {
+                                "oneOf": [
+                                    {
+                                        "type": "string",
+                                        "pattern": "^(mp|mvc)-\\d+$",
+                                        "description": "Materials Project ID (mp-XXXX)",
+                                    },
+                                    {
+                                        "type": "string",
+                                        "pattern": "^\\d+$",
+                                        "description": "Numeric material ID (will be mapped to mp-XXXX)",
+                                    },
+                                    {
+                                        "type": "string",
+                                        "pattern": "^[A-Z][a-z]?(-[A-Z][a-z]?)+$",
+                                        "description": "Chemical system (e.g. Fe-O)",
+                                    },
+                                    {
+                                        "type": "string",
+                                        "pattern": "^[A-Z][a-z]?\\d*([A-Z][a-z]?\\d*)*$",
+                                        "description": "Chemical formula (e.g. Fe2O3)",
+                                    },
+                                ],
+                                "description": "Material identifier, formula, chemical system, or unique number to search for",
+                            },
+                            "filters": {
+                                "type": "object",
+                                "description": "Additional filters to refine the search results",
+                                "properties": {
+                                    "band_gap": {
+                                        "type": "object",
+                                        "properties": {
+                                            "min": {"type": "number"},
+                                            "max": {"type": "number"},
+                                        },
+                                        "description": "Filter materials by band gap float range",
+                                        "required": ["min", "max"],
+                                        "additionalProperties": False,
+                                    },
+                                    "energy_above_hull": {
+                                        "type": "object",
+                                        "properties": {
+                                            "min": {"type": "number"},
+                                            "max": {"type": "number"},
+                                        },
+                                        "description": "Filter materials by energy above hull float range",
+                                        "required": ["min", "max"],
+                                        "additionalProperties": False,
+                                    },
+                                    "formation_energy_per_atom": {
+                                        "type": "object",
+                                        "properties": {
+                                            "min": {"type": "number"},
+                                            "max": {"type": "number"},
+                                        },
+                                        "description": "Filter materials by formation energy per atom float range",
+                                        "required": ["min", "max"],
+                                        "additionalProperties": False,
+                                    },
+                                    "density": {
+                                        "type": "object",
+                                        "properties": {
+                                            "min": {"type": "number"},
+                                            "max": {"type": "number"},
+                                        },
+                                        "description": "Filter materials by density float range",
+                                        "required": ["min", "max"],
+                                        "additionalProperties": False,
+                                    },
+                                    "volume": {
+                                        "type": "object",
+                                        "properties": {
+                                            "min": {"type": "number"},
+                                            "max": {"type": "number"},
+                                        },
+                                        "description": "Filter materials by volume float range",
+                                        "required": ["min", "max"],
+                                        "additionalProperties": False,
+                                    },
+                                    "is_stable": {
+                                        "type": "boolean",
+                                        "description": "Filter materials by stability (true for stable materials, false for unstable)",
+                                        "additionalProperties": False,
+                                    },
+                                    "is_metal": {
+                                        "type": "boolean",
+                                        "description": "Filter materials by metallicity (true for metals, false for non-metals)",
+                                        "additionalProperties": False,
+                                    },
+                                    "crystal_system": {
+                                        "type": "string",
+                                        "enum": [
+                                            "cubic",
+                                            "tetragonal",
+                                            "orthorhombic",
+                                            "hexagonal",
+                                            "trigonal",
+                                            "monoclinic",
+                                            "triclinic",
+                                        ],
+                                        "description": "Filter materials by crystal system (e.g., 'cubic', 'tet', etc.)",
+                                        "additionalProperties": False,
+                                    },
+                                    "spacegroup_number": {
+                                        "type": "integer",
+                                        "description": "Filter materials by spacegroup number",
+                                        "additionalProperties": False,
+                                    },
+                                    "nsites": {
+                                        "type": "integer",
+                                        "description": "Filter materials by number of sites",
+                                        "additionalProperties": False,
+                                    },
+                                },
+                            },
+                            "additionalProperties": False,
                         },
-                        "required": ["format", "data"],
+                        "required": ["material"],
                         "additionalProperties": False,
-                    }
+                    },
                 },
-                "required": ["structure_data"],
+                "required": ["query"],
                 "additionalProperties": False,
             },
         },
@@ -85,12 +146,62 @@ AVAILABLES_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "material_id": {
-                        "type": "integer",
-                        "description": "Unique identifier of the material",
+                    "query": {
+                        "type": "object",
+                        "description": "Identifier for the material to retrieve properties for",
+                        "properties": {
+                            "material": {
+                                "oneOf": [
+                                    {
+                                        "type": "string",
+                                        "pattern": "^(mp|mvc)-\\d+$",
+                                        "description": "Materials Project ID (mp-XXXX)",
+                                    },
+                                    {
+                                        "type": "string",
+                                        "pattern": "^\\d+$",
+                                        "description": "Numeric material ID (will be mapped to mp-XXXX)",
+                                    },
+                                    {
+                                        "type": "string",
+                                        "pattern": "^[A-Z][a-z]?(-[A-Z][a-z]?)+$",
+                                        "description": "Chemical system (e.g. Fe-O)",
+                                    },
+                                    {
+                                        "type": "string",
+                                        "pattern": "^[A-Z][a-z]?\\d*([A-Z][a-z]?\\d*)*$",
+                                        "description": "Chemical formula (e.g. Fe2O3)",
+                                    },
+                                ],
+                                "description": "Material identifier, formula, chemical system, or unique number to search for",
+                            },
+                        },
+                        "required": ["material"],
+                        "additionalProperties": False,
+                    },
+                    "propertys": {
+                        "type:": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "formula_pretty",
+                                "chemsys",
+                                "crystal_system",
+                                "spacegroup",
+                                "density",
+                                "volume",
+                                "nsites",
+                                "energy_above_hull",
+                                "formation_energy_per_atom",
+                                "is_stable",
+                                "is_metal",
+                                "band_gap",
+                                "efermi",
+                            ],
+                        },
                     },
                 },
-                "required": ["material_id"],
+                "required": ["query", "propertys"],
                 "additionalProperties": False,
             },
         },
