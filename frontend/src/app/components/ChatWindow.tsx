@@ -2,20 +2,17 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { ENV } from '@/env.client'
 import ChatMessage from "./ChatMessage";
 import ChatInput from "./ChatInput";
 
 const resolveChatEndpoint = () => {
-  const envProcess = (globalThis as {
-    process?: { env?: Record<string, string | undefined> };
-  }).process;
-  //const rawBase = envProcess?.env?.NEXT_PUBLIC_API_URL ?? "";
-  const rawBase = process.env.NEXT_PUBLIC_API_URL;
+  const rawBase = ENV.API_URL;
   let trimmedBase = rawBase;
   while (trimmedBase.endsWith("/")) {
     trimmedBase = trimmedBase.slice(0, -1);
   }
-  return trimmedBase ? `${trimmedBase}/v1/chat` : "/v1/chat";
+  return trimmedBase ? `${trimmedBase}/v1/completions` : "/v1/completions";
 };
 
 interface Message {
@@ -46,7 +43,7 @@ export default function ChatWindow() {
       const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ prompt: text }),
       });
 
       if (!response.ok) {
@@ -54,7 +51,11 @@ export default function ChatWindow() {
       }
 
       const data = await response.json();
-      const responseText = typeof data?.response === "string" ? data.response : "";
+      if (!data?.choices?.length) {
+        throw new Error("Invalid completion response");
+      }
+
+      const responseText: string = data.choices[0].text;
 
       if (!responseText) {
         setMessages(prev => [
