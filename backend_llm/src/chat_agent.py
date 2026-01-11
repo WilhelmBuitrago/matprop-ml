@@ -9,7 +9,7 @@ import json
 import os
 import pickle
 import requests
-from typing import List, Dict, Optional, Tuple
+from typing import Any, List, Dict, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 import hashlib
@@ -25,7 +25,7 @@ if not logger.handlers:
 class ChatConfig:
     """Configuration for chat agent"""
 
-    model_endpoint: str = "http://agent-policy-ollama:8000/v1/completions"
+    model_endpoint: str = "http://agents:8003/v1/completions"
     model_name: str = "model_path_used_during_hosting_by_vllm_serve"
     temperature: float = 0.7
     max_tokens: int = 512
@@ -64,6 +64,13 @@ class ChatAgent:
     def _estimate_tokens(self, text: str) -> int:
         """Rough estimation of tokens (approximate: 1 token ≈ 4 characters)"""
         return len(text) // 4
+
+    def _estimate_tokens_messages(self, messages: List[Dict[str, str]]) -> int:
+        """Estimate tokens for a list of messages"""
+        total_tokens = 0
+        for message in messages:
+            total_tokens += self._estimate_tokens(message["content"])
+        return total_tokens
 
     def _get_conversation_hash(self) -> str:
         """Generate a hash for the current conversation"""
@@ -144,7 +151,7 @@ class ChatAgent:
         # prompt += """Assistant:"""
         # logger.info(f"Constructed prompt for model: {history}")
         payload = {
-            "prompt": history,
+            "history": history,
             "temperature": self.config.temperature,
             "max_tokens": min(self.config.max_tokens, 512),  # Limit response length
             # "stop": ["\n\nUser:", "\n\nAssistant:", "User:", "Assistant:"],
@@ -156,17 +163,18 @@ class ChatAgent:
                 self.config.model_endpoint,
                 json=payload,
                 headers={"Content-Type": "application/json"},
-                timeout=60,
+                timeout=90,
             )
             # logger.info(f"Model response status code: {response.status_code}")
             # logger.info(f"Model response content: {response.text}")
             response.raise_for_status()
+            # logger.info(f"Model response: {response}")
 
-            result = response.json()
-            response_text = result["choices"][0]["text"].strip()
-
+            response_text = response.json()
+            # logger.info(f"Raw model response text: {response_text}")
             # Clean up the response to remove any unwanted tags
             cleaned_response = self._clean_response(response_text)
+            # logger.info(f"Cleaned model response text: {cleaned_response}")
 
             return cleaned_response
 
@@ -229,10 +237,11 @@ class ChatAgent:
         """
         # logger.info(f"User message: {user_message}")
         # Add user message to history
-        self.conversation_history.append({"role": "user", "content": user_message})
+        [self.conversation_history.append(m) for m in user_message]
+        # self.conversation_history.append({"role": "user", "content": user_message})
         # logger.info(f"Updated conversation history: {self.conversation_history}")
         # Update token count
-        self.current_tokens += self._estimate_tokens(user_message)
+        self.current_tokens += self._estimate_tokens_messages(self.conversation_history)
         # logger.info(f"Current tokens after user message: {self.current_tokens}")
         # Manage context if needed
         self._manage_context()
@@ -240,8 +249,11 @@ class ChatAgent:
         try:
             # Get response from model
             # logger.info("Calling model for response...")
+            # logger.info(
+            #    f"Conversation history sent to model: {self.conversation_history}"
+            # )
             response = self._call_model(self.conversation_history)
-            # logger.info(f"Model response: {response}")
+            logger.info(f"Model response: {response}")
 
             # Add assistant response to history
             self.conversation_history.append({"role": "assistant", "content": response})

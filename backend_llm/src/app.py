@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional, Dict
 from chat_agent import ChatAgent, ChatConfig
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ class ConfigureRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    message: str
+    messages: List[Dict[str, str]]
 
 
 app = FastAPI(title="MatProp LLM Backend")
@@ -44,10 +44,10 @@ agent: Optional[ChatAgent] = None
 def init_default_agent():
     return ChatAgent(
         ChatConfig(
-            model_endpoint="http://llamat2-chat:8002/v1/completions",
+            model_endpoint="http://agents:8003/v1/completions",
             temperature=0.7,
-            max_tokens=512,
-            max_context_tokens=1024,
+            max_tokens=256,
+            max_context_tokens=2096,
             cache_dir="/data/cache",
         )
     )
@@ -85,7 +85,7 @@ def chat_endpoint(req: ChatRequest):
 
     # logger.info("agent: {}".format(agent))
     try:
-        response = agent.chat(req.message)
+        response = agent.chat(req.messages)
         return {"response": response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Model backend error: {str(e)}")
