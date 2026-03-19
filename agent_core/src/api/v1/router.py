@@ -1,11 +1,32 @@
 from fastapi import APIRouter, FastAPI
 from .scheme import Tools, CompletionRequest
-from tools.config import AVAILABLES_TOOLS
+from tools.config import get_available_tools_for_runtime
 from .service import CompletionService
 from contextlib import asynccontextmanager
 import requests
+import os
+import logging
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+BACKEND_LLM_URL = os.getenv("BACKEND_LLM_URL", "http://backend-llm:8001")
+HTTP_TIMEOUT_SECONDS = int(os.getenv("INTERNAL_HTTP_TIMEOUT_SECONDS", "20"))
+
+retry = Retry(
+    total=3,
+    connect=3,
+    read=3,
+    backoff_factor=0.3,
+    status_forcelist=(429, 500, 502, 503, 504),
+    allowed_methods=("GET", "POST"),
+)
+adapter = HTTPAdapter(max_retries=retry)
+http = requests.Session()
+http.mount("http://", adapter)
+http.mount("https://", adapter)
 
 
 @asynccontextmanager
@@ -17,7 +38,7 @@ async def lifespan(app: FastAPI):
 
 @router.get("/tools", response_model=Tools)
 def get_tools():
-    return {"tools": AVAILABLES_TOOLS}
+    return {"tools": get_available_tools_for_runtime()}
 
 
 @router.post("/completions")
@@ -28,19 +49,34 @@ def chat(request: CompletionRequest):
 
 @router.get("/historial_summary")
 def historial_summary_endpoint():
-    response = requests.get("http://localhost:8001/v1/historial_summary")
+    response = http.get(
+        f"{BACKEND_LLM_URL}/v1/historial_summary", timeout=HTTP_TIMEOUT_SECONDS
+    )
+    return response.json()
+
+
+@router.post("/clear_history")
+def clear_history_endpoint():
+    response = http.post(
+        f"{BACKEND_LLM_URL}/v1/clear_history", timeout=HTTP_TIMEOUT_SECONDS
+    )
     return response.json()
 
 
 @router.get("/clear_history")
-def clear_history_endpoint():
-    response = requests.get("http://localhost:8001/v1/clear_history")
+def clear_history_endpoint_deprecated():
+    logger.warning("GET /v1/clear_history is deprecated. Use POST /v1/clear_history")
+    response = http.post(
+        f"{BACKEND_LLM_URL}/v1/clear_history", timeout=HTTP_TIMEOUT_SECONDS
+    )
     return response.json()
 
 
 @router.get("/conversation_history")
 def conversation_history_endpoint():
-    response = requests.get("http://localhost:8001/v1/conversation_history")
+    response = http.get(
+        f"{BACKEND_LLM_URL}/v1/conversation_history", timeout=HTTP_TIMEOUT_SECONDS
+    )
     return response.json()
 
 

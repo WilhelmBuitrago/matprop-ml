@@ -105,7 +105,11 @@ def build_layout(cache_dir: Optional[Path] = None) -> Dict[str, Dict]:
                 logger.debug(f"  Analizando split: {d.name}")
                 files = _list_hdf5_and_json_files(d)
                 submodels = _pair_submodels(files)
-                split_contents[d.name] = [k for k in submodels.values()][0]
+                split_contents[d.name] = [
+                    filename
+                    for submodel_files in submodels.values()
+                    for filename in submodel_files
+                ]
             metadata["splits"] = splits
 
             layout[model_key] = {

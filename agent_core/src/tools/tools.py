@@ -2,6 +2,13 @@ from mp_api.client import MPRester
 from typing import Dict, List, Union
 import re
 from pymatgen.core import Structure
+import os
+
+API_MP_KEY = os.getenv("MP_API_KEY")
+if not API_MP_KEY:
+    raise RuntimeError(
+        "Missing required environment variable: MP_API_KEY (or legacy API_MP_KEY)"
+    )
 
 MP_ID_RE = re.compile(r"^mp-\d+$")
 CHEMSYS_RE = re.compile(r"^[A-Z][a-z]?(-[A-Z][a-z]?)+$")
@@ -106,74 +113,112 @@ def normalize_material_query(material):
     raise ValueError("Unsupported material input")
 
 
-def search_materials(query: Dict) -> List:
-    base = normalize_material_query(query.get("material"))
-    extra_filters = normalize_filters(query.get("filters", {}))
+class tool:
+    def __init__(self):
+        pass
 
-    with MPRester("9QupKFrrliKUyngfOuzt9rM4lFrD37NP") as mpr:
-        if base["type"] == "material_id":
-            docs = mpr.materials.summary.search(
-                material_ids=base["value"], **extra_filters
-            )
-
-        if base["type"] == "formula":
-            docs = mpr.materials.summary.search(formula=base["value"], **extra_filters)
-
-        if base["type"] == "chemsys":
-            docs = mpr.materials.summary.search(chemsys=base["value"], **extra_filters)
-
-    materials = []
-    summary = {}
-    for doc in docs:
-        summary["material_id"] = doc.material_id
-        summary["formula_pretty"] = doc.formula_pretty
-        summary["chemsys"] = doc.chemsys
-        summary["crystal_system"] = doc.symmetry.crystal_system.name
-        summary["spacegroup"] = {
-            "number": doc.symmetry.number,
-            "symbol": doc.symmetry.symbol,
-        }
-        summary["density"] = doc.density
-        summary["volume"] = doc.volume
-        summary["nsites"] = doc.nsites
-        summary["energy_above_hull"] = doc.energy_above_hull
-        summary["formation_energy_per_atom"] = doc.formation_energy_per_atom
-        summary["is_stable"] = doc.is_stable
-        summary["is_metal"] = doc.is_metal
-        summary["band_gap"] = doc.band_gap
-        summary["efermi"] = doc.efermi
-        materials.append(summary)
-    return materials
+    def execute(self, **kwargs):
+        pass
 
 
-def get_material_properties(query: Dict, propertys: List):
+class SearchMaterialsTool(tool):
+    def __init__(self):
+        super().__init__()
 
-    materials = search_materials(query)
-    propertys.append("material_id")
-    summary = {}
-    identity = ["material_id", "formula_pretty", "chemsys", "nsites"]
-    termodynamic = ["energy_above_hull", "formation_energy_per_atom", "is_stable"]
-    crystallography = ["crystal_system", "spacegroup", "density", "volume"]
-    electronic = ["is_metal", "band_gap", "efermi"]
-    if materials:
-        summary["identity"] = {
-            key: materials[0][key] for key in identity if key in propertys
-        }
-        summary["termodynamic"] = {
-            key: materials[0][key] for key in termodynamic if key in propertys
-        }
-        summary["crystallography"] = {
-            key: materials[0][key] for key in crystallography if key in propertys
-        }
-        summary["electronic"] = {
-            key: materials[0][key] for key in electronic if key in propertys
-        }
-        return summary
-    else:
-        return {"error": "Material not found"}
+    def search_materials(self, query: Dict) -> List[Dict]:
+        base = normalize_material_query(query.get("material"))
+        extra_filters = normalize_filters(query.get("filters", {}))
+
+        with MPRester(API_MP_KEY) as mpr:
+            if base["type"] == "material_id":
+                docs = mpr.materials.summary.search(
+                    material_ids=base["value"], **extra_filters
+                )
+
+            if base["type"] == "formula":
+                docs = mpr.materials.summary.search(
+                    formula=base["value"], **extra_filters
+                )
+
+            if base["type"] == "chemsys":
+                docs = mpr.materials.summary.search(
+                    chemsys=base["value"], **extra_filters
+                )
+
+        materials = []
+        for doc in docs:
+            summary = {}
+            summary["material_id"] = doc.material_id
+            print(doc.material_id)
+            summary["formula_pretty"] = doc.formula_pretty
+            summary["chemsys"] = doc.chemsys
+            summary["crystal_system"] = doc.symmetry.crystal_system.name
+            summary["spacegroup"] = {
+                "number": doc.symmetry.number,
+                "symbol": doc.symmetry.symbol,
+            }
+            summary["density"] = doc.density
+            summary["volume"] = doc.volume
+            summary["nsites"] = doc.nsites
+            summary["energy_above_hull"] = doc.energy_above_hull
+            summary["formation_energy_per_atom"] = doc.formation_energy_per_atom
+            summary["is_stable"] = doc.is_stable
+            summary["is_metal"] = doc.is_metal
+            summary["band_gap"] = doc.band_gap
+            summary["efermi"] = doc.efermi
+            materials.append(summary)
+        return materials
+
+    def execute(self, **kwargs):
+        query = kwargs.get("query", {})
+        return self.search_materials(query)
 
 
-def visualize_material_structure(material: Union[str, Structure]) -> str:
+class GetMaterialPropertiesTool(tool):
+    def __init__(self):
+        super().__init__()
+        self.search_tool = SearchMaterialsTool()
+
+    def get_material_properties(self, query: Dict, propertys: List):
+        materials = self.search_tool.search_materials(query)
+        selected_properties = list(propertys)
+        if "material_id" not in selected_properties:
+            selected_properties.append("material_id")
+        summary = {}
+        identity = ["material_id", "formula_pretty", "chemsys", "nsites"]
+        termodynamic = ["energy_above_hull", "formation_energy_per_atom", "is_stable"]
+        crystallography = ["crystal_system", "spacegroup", "density", "volume"]
+        electronic = ["is_metal", "band_gap", "efermi"]
+        if materials:
+            summary["identity"] = {
+                key: materials[0][key] for key in identity if key in selected_properties
+            }
+            summary["termodynamic"] = {
+                key: materials[0][key]
+                for key in termodynamic
+                if key in selected_properties
+            }
+            summary["crystallography"] = {
+                key: materials[0][key]
+                for key in crystallography
+                if key in selected_properties
+            }
+            summary["electronic"] = {
+                key: materials[0][key]
+                for key in electronic
+                if key in selected_properties
+            }
+            return summary
+        else:
+            return {"error": "Material not found"}
+
+    def execute(self, **kwargs):
+        query = kwargs.get("query", {})
+        propertys = kwargs.get("propertys", [])
+        return self.get_material_properties(query, propertys)
+
+
+def visualize_material_structure(material: Union[str, int, Structure]):
     """
     Visualize the crystal structure of a material using pymatgen's StructureVisualizer.
 
@@ -185,10 +230,12 @@ def visualize_material_structure(material: Union[str, Structure]) -> str:
     """
     from pymatgen.vis.structure_chemview import quick_view
 
-    if isinstance(material, str):
-        with MPRester("9QupKFrrliKUyngfOuzt9rM4lFrD37NP") as mpr:
-            material = normalize_material_query(material)
-            structure = mpr.get_structure_by_material_id(material)
+    if isinstance(material, (str, int)):
+        with MPRester(API_MP_KEY) as mpr:
+            normalized = normalize_material_query(material)
+            if normalized["type"] != "material_id" or not normalized["value"]:
+                raise ValueError("material must resolve to a valid material_id")
+            structure = mpr.get_structure_by_material_id(normalized["value"][0])
     elif isinstance(material, Structure):
         structure = material
     else:
@@ -202,8 +249,13 @@ def visualize_material_structure(material: Union[str, Structure]) -> str:
 
 
 if __name__ == "__main__":
-
-    query = "mp-149"
-    result = visualize_material_structure(query)
-
+    query = {
+        "query": {"material": "Si", "filters": {"volume": {"min": 925, "max": 927}}}
+    }
+    tool = SearchMaterialsTool()
+    result = tool.execute(**query)
     print(result)
+    # query = "mp-149"
+    # result = visualize_material_structure(query)
+
+    # print(result)

@@ -6,7 +6,10 @@ from matprop_ml.models.registry import ModelRegistry
 from matprop_ml.models.loader import ModelLoader
 from matprop_ml.models.build_layout import save_layout_json
 import shutil
+
 MODULE_CACHE_ATTR = "matprop_ml.models.download_models.CACHE_DIR"
+pytestmark = pytest.mark.network
+
 
 @pytest.mark.parametrize(
     "model_key",
@@ -52,7 +55,6 @@ def test_generate_layout(tmp_path, monkeypatch, model_key):
     assert "splits" in entry["metadata"], "Falta la clave 'splits'"
     if model_key == "mp-2019.4.1":
         assert "files" in entry or "properties" in entry, "Falta información del modelo"
-
 
 
 @pytest.mark.parametrize(

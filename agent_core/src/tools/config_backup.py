@@ -129,7 +129,7 @@ AVAILABLES_TOOLS = [
                             },
                             "additionalProperties": False,
                         },
-                        "required": ["material"],
+                        "required": ["material", "filters"],
                         "additionalProperties": False,
                     },
                 },
@@ -180,7 +180,7 @@ AVAILABLES_TOOLS = [
                         "additionalProperties": False,
                     },
                     "propertys": {
-                        "type": "array",
+                        "type:": "array",
                         "items": {
                             "type": "string",
                             "enum": [
@@ -467,19 +467,3 @@ AVAILABLES_TOOLS = [
         },
     },
 ]
-
-
-IMPLEMENTED_TOOL_NAMES = {
-    "search_materials",
-    "get_material_properties",
-    "delegate_to_reasoner",
-}
-
-
-def get_available_tools_for_runtime():
-    """Expose only tools that are currently implemented by the executor."""
-    return [
-        tool
-        for tool in AVAILABLES_TOOLS
-        if tool.get("function", {}).get("name") in IMPLEMENTED_TOOL_NAMES
-    ]

@@ -6,7 +6,7 @@ services:
       context: ./agent_core
       dockerfile: Dockerfile
     container_name: agent-core
-    env_file: .env
+    env_file: ./agent_core/.env
     ports:
       - "${AGENT_CORE_PORT}:8004"
     restart: unless-stopped

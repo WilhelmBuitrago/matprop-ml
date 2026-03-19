@@ -9,6 +9,7 @@ import pytest
 
 
 MODULE_CACHE_ATTR = "matprop_ml.models.download_models.CACHE_DIR"
+pytestmark = pytest.mark.network
 
 
 @pytest.mark.parametrize(

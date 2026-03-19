@@ -1,5 +1,4 @@
 # agent_policy_ollama/src/api/v1/service.py
-from urllib import response
 import ollama
 from .scheme import (
     IntentionRequest,
@@ -18,10 +17,50 @@ from typing import Any, Dict, List
 import requests
 import time
 import numpy as np
+import threading
 
 logger = logging.getLogger(__name__)
 if not logger.hasHandlers():
     logging.basicConfig(level=logging.INFO)
+
+
+_OLLAMA_MODEL_LOCK = threading.Lock()
+_DEFAULT_KEEP_ALIVE = "0s"
+
+
+def resolve_keep_alive() -> str:
+    raw = os.getenv("AGENTS_OLLAMA_KEEP_ALIVE", _DEFAULT_KEEP_ALIVE).strip()
+    return raw if raw else _DEFAULT_KEEP_ALIVE
+
+
+def _ollama_chat_with_runtime(*, model: str, messages: List[Dict[str, Any]], **kwargs):
+    keep_alive = resolve_keep_alive()
+    start = time.perf_counter()
+    logger.info(
+        "[ollama-runtime] waiting_lock model=%s keep_alive=%s",
+        model,
+        keep_alive,
+    )
+    with _OLLAMA_MODEL_LOCK:
+        logger.info(
+            "[ollama-runtime] lock_acquired model=%s keep_alive=%s",
+            model,
+            keep_alive,
+        )
+        response = ollama.chat(
+            model=model,
+            messages=messages,
+            keep_alive=keep_alive,
+            **kwargs,
+        )
+    elapsed_ms = int((time.perf_counter() - start) * 1000)
+    logger.info(
+        "[ollama-runtime] lock_released model=%s elapsed_ms=%s keep_alive=%s",
+        model,
+        elapsed_ms,
+        keep_alive,
+    )
+    return response
 
 
 @dataclass
@@ -36,7 +75,7 @@ class LoadModelsService:
     ):
         if names is None:
             self.names = [
-                "kwangsuklee/Qwen2.5-7B-Instruct-1M-Q6_K",
+                "yasserrmd/Qwen2.5-7B-Instruct-1M",
                 "WilhelmBuitrago/llamat-3-chat-8b:Q5_K_M",
                 "WilhelmBuitrago/llamat-3-cif-8b:Q5_K_M",
             ]
@@ -88,7 +127,7 @@ class ChatService:
         }
         try:
             logger.info(f"menssages: {request.history}")
-            response = ollama.chat(
+            response = _ollama_chat_with_runtime(
                 model=self.name,
                 messages=request.history,
                 options=options,
@@ -111,7 +150,7 @@ class CifService:
             "num_predict": max_tokens,
         }
         try:
-            response = ollama.chat(
+            response = _ollama_chat_with_runtime(
                 model=self.name,
                 messages=messages,
                 options=options,
@@ -176,6 +215,7 @@ class PlanningService:
         try:
             response = requests.get(
                 f"http://agent-core:8004/v1/health",
+                timeout=20,
             )
             if response.status_code != 200:
                 raise PolicyOutputError("Error checking tool service health.")
@@ -183,6 +223,7 @@ class PlanningService:
             response = requests.get(
                 f"http://agent-core:8004/v1/tools",
                 headers={"content-type": "application/json"},
+                timeout=20,
             )
             tools_response = response.json()["tools"]
         except Exception as e:
@@ -202,7 +243,7 @@ class PlanningService:
         ]
 
         try:
-            response = ollama.chat(
+            response = _ollama_chat_with_runtime(
                 model=self.name,
                 messages=messages,
                 tools=tools_response,
@@ -243,6 +284,7 @@ class PlanningService:
             return False
 
     def _parse_steps(self, steps: List[PlanStep]) -> List[PlanStep]:
+        logger.info(f"Validating steps: {steps}")
         system = {
             "role": "system",
             "content": (
@@ -279,6 +321,7 @@ class PlanningService:
                     parsed_steps.append(
                         PlanStep(tool=tool_name, arguments=raw_arguments)
                     )
+                    valids.append(True)
                     continue
 
                 user_message = {
@@ -292,7 +335,7 @@ class PlanningService:
                     ),
                 }
 
-                response = ollama.chat(
+                response = _ollama_chat_with_runtime(
                     model=self.name,
                     messages=[system, user_message],
                     options={"temperature": 0.2, "num_predict": 256},
@@ -322,6 +365,10 @@ class PlanningService:
 
             if all(valids) and len(valids) == len(steps):
                 break
+        logger.info(f"Validated steps: {parsed_steps}")
+
+        if not parsed_steps:
+            raise PolicyOutputError("EMPTY_PLAN")
 
         if parsed_steps[-1].tool != "delegate_to_reasoner":
             parsed_steps.append(

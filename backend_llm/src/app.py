@@ -1,6 +1,9 @@
 # backend_llm/src/app.py
 import logging
-from fastapi import FastAPI, HTTPException
+import os
+import threading
+from uuid import uuid4
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict
@@ -24,17 +27,30 @@ class ChatRequest(BaseModel):
     messages: List[Dict[str, str]]
 
 
+def _parse_cors_origins() -> list[str]:
+    raw = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:3000")
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
 app = FastAPI(title="MatProp LLM Backend")
+
+ALLOWED_ORIGINS = _parse_cors_origins()
+ALLOW_CREDENTIALS = "*" not in ALLOWED_ORIGINS
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=ALLOW_CREDENTIALS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-agent: Optional[ChatAgent] = None
+SESSION_COOKIE_NAME = "matprop_session_id"
+SESSION_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
+
+_agents_by_session: Dict[str, ChatAgent] = {}
+_config_by_session: Dict[str, ChatConfig] = {}
+_sessions_lock = threading.RLock()
 
 # ------------------------------
 # Helpers
@@ -53,12 +69,40 @@ def init_default_agent():
     )
 
 
+def _get_or_create_session_id(request: Request, response: Response) -> str:
+    session_id = request.cookies.get(SESSION_COOKIE_NAME)
+    if session_id:
+        return session_id
+
+    session_id = str(uuid4())
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=session_id,
+        httponly=True,
+        samesite="lax",
+        max_age=SESSION_COOKIE_MAX_AGE_SECONDS,
+    )
+    return session_id
+
+
+def _get_or_create_agent(session_id: str) -> ChatAgent:
+    with _sessions_lock:
+        existing = _agents_by_session.get(session_id)
+        if existing is not None:
+            return existing
+
+        cfg = _config_by_session.get(session_id)
+        created = ChatAgent(cfg) if cfg else init_default_agent()
+        _agents_by_session[session_id] = created
+        return created
+
+
 # ------------------------------
 # Endpoints
 # -----------------------------
 @app.post("/v1/configure")
-def configure_endpoint(cfg: ConfigureRequest):
-    global agent
+def configure_endpoint(cfg: ConfigureRequest, request: Request, response: Response):
+    session_id = _get_or_create_session_id(request, response)
 
     config = ChatConfig(
         model_endpoint=cfg.model_endpoint,
@@ -69,24 +113,25 @@ def configure_endpoint(cfg: ConfigureRequest):
         system_prompt=cfg.system_prompt,
     )
 
-    agent = ChatAgent(config)
+    with _sessions_lock:
+        _config_by_session[session_id] = config
+        _agents_by_session[session_id] = ChatAgent(config)
 
-    return {"status": "configured", "config": config.__dict__}
+    return {
+        "status": "configured",
+        "session_id": session_id,
+        "config": config.__dict__,
+    }
 
 
 @app.post("/v1/chat")
-def chat_endpoint(req: ChatRequest):
+def chat_endpoint(req: ChatRequest, request: Request, response: Response):
+    session_id = _get_or_create_session_id(request, response)
+    agent = _get_or_create_agent(session_id)
 
-    global agent
-    # logger.info(f"Received chat message: {req.message}")
-    if agent is None:
-        # logger.info("Agent not initialized. Initializing default agent.")
-        agent = init_default_agent()
-
-    # logger.info("agent: {}".format(agent))
     try:
-        response = agent.chat(req.messages)
-        return {"response": response}
+        model_response = agent.chat(req.messages)
+        return {"session_id": session_id, "response": model_response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Model backend error: {str(e)}")
     """
@@ -97,34 +142,43 @@ def chat_endpoint(req: ChatRequest):
 
 
 @app.get("/v1/historial_summary")
-def historial_summary_endpoint():
-    global agent
+def historial_summary_endpoint(request: Request, response: Response):
+    session_id = _get_or_create_session_id(request, response)
+    agent = _agents_by_session.get(session_id)
 
     if agent is None:
         return {"summary": ""}
 
-    return {"summary": agent.get_conversation_summary()}
+    return {"session_id": session_id, "summary": agent.get_conversation_summary()}
+
+
+@app.post("/v1/clear_history")
+def clear_history_endpoint(request: Request, response: Response):
+    session_id = _get_or_create_session_id(request, response)
+    agent = _agents_by_session.get(session_id)
+
+    if agent is None:
+        return {"session_id": session_id, "status": "already empty"}
+
+    agent.clear_history()
+    return {"session_id": session_id, "status": "history cleared"}
 
 
 @app.get("/v1/clear_history")
-def clear_history_endpoint():
-    global agent
-
-    if agent is None:
-        return {"status": "already empty"}
-
-    agent.clear_history()
-    return {"status": "history cleared"}
+def clear_history_endpoint_deprecated(request: Request, response: Response):
+    logger.warning("GET /v1/clear_history is deprecated. Use POST /v1/clear_history")
+    return clear_history_endpoint(request, response)
 
 
 @app.get("/v1/conversation_history")
-def conversation_history_endpoint():
-    global agent
+def conversation_history_endpoint(request: Request, response: Response):
+    session_id = _get_or_create_session_id(request, response)
+    agent = _agents_by_session.get(session_id)
 
     if agent is None:
-        return {"history": []}
+        return {"session_id": session_id, "history": []}
 
-    return {"history": agent.conversation_history}
+    return {"session_id": session_id, "history": agent.conversation_history}
 
 
 # -------------------------------------------------

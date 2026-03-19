@@ -1,15 +1,18 @@
 from matprop_ml.models.material_predictor import MaterialPredictor
 from pymatgen.core.structure import Structure
+import threading
 
 
 class PredictionService:
     def __init__(self):
         self.loaded_models = {}
+        self._lock = threading.RLock()
 
     def get_predictor(self, model_key: str) -> MaterialPredictor:
-        if model_key not in self.loaded_models:
-            self.loaded_models[model_key] = MaterialPredictor(model_key)
-        return self.loaded_models[model_key]
+        with self._lock:
+            if model_key not in self.loaded_models:
+                self.loaded_models[model_key] = MaterialPredictor(model_key)
+            return self.loaded_models[model_key]
 
     def predict_from_file(self, model_key: str, filepath: str):
         predictor = self.get_predictor(model_key)

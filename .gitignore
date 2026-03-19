@@ -214,3 +214,5 @@ node_modules/
 .next/
 npm-debug.log
 llamat2-chat/
+DOCUMENTATION_SCHEMA.md
+Problems.md

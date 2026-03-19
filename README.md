@@ -39,6 +39,14 @@ El foco del proyecto no es académico, sino **utilitario**: permitir que un usua
 
 El sistema sigue una arquitectura **multi‑modelo por roles**:
 
+### 🔄 Versionado de chat y contexto
+
+- `v1` (`/v1/completions`): flujo simple de completions (query -> respuesta) con orquestacion lineal.
+- `v2` (`/v2/completions`): flujo agente completo con loop de decisiones, evaluacion de evidencia y control de presupuesto.
+- En frontend, el toggle `More context` controla el modo:
+  - OFF -> `v1`
+  - ON -> `v2`
+
 ## 📂 Estructura del proyecto
 
 ```

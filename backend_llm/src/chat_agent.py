@@ -60,6 +60,7 @@ class ChatAgent:
         self.conversation_history.append(
             {"role": "system", "content": self.config.system_prompt}
         )
+        self.current_tokens = self._estimate_tokens(self.config.system_prompt)
 
     def _estimate_tokens(self, text: str) -> int:
         """Rough estimation of tokens (approximate: 1 token ≈ 4 characters)"""
@@ -225,23 +226,37 @@ class ChatAgent:
 
         return cleaned
 
-    def chat(self, user_message: str) -> str:
+    def chat(self, messages: List[Dict[str, str]]) -> str:
         """
         Process a user message and return assistant response
 
         Args:
-            user_message: The user's question/message
+            messages: Conversation messages to append before generating a response
 
         Returns:
             Assistant's response
         """
-        # logger.info(f"User message: {user_message}")
-        # Add user message to history
-        [self.conversation_history.append(m) for m in user_message]
-        # self.conversation_history.append({"role": "user", "content": user_message})
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("messages must be a non-empty list")
+
+        for message in messages:
+            if not isinstance(message, dict):
+                raise ValueError("Each message must be a dict with role/content")
+            role = message.get("role")
+            content = message.get("content")
+            if role not in {"system", "user", "assistant"}:
+                raise ValueError(f"Invalid message role: {role}")
+            if not isinstance(content, str):
+                raise ValueError("Message content must be a string")
+
+        user_messages = [
+            {"role": message["role"], "content": message["content"]}
+            for message in messages
+        ]
+        self.conversation_history.extend(user_messages)
         # logger.info(f"Updated conversation history: {self.conversation_history}")
         # Update token count
-        self.current_tokens += self._estimate_tokens_messages(self.conversation_history)
+        self.current_tokens += self._estimate_tokens_messages(user_messages)
         # logger.info(f"Current tokens after user message: {self.current_tokens}")
         # Manage context if needed
         self._manage_context()
@@ -264,9 +279,11 @@ class ChatAgent:
             return response
 
         except Exception as e:
-            # Remove user message on error
-            self.conversation_history.pop()
-            self.current_tokens -= self._estimate_tokens(user_message)
+            # Remove batch of messages appended in this call on error.
+            for _ in user_messages:
+                if self.conversation_history:
+                    self.conversation_history.pop()
+            self.current_tokens -= self._estimate_tokens_messages(user_messages)
             raise e
 
     def clear_history(self):

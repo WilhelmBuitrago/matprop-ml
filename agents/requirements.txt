@@ -1,7 +1,7 @@
-requests
-fastapi
-uvicorn[standard]
-ollama
-pydantic
-jsonschema
-numpy
+requests==2.32.3
+fastapi==0.115.11
+uvicorn[standard]==0.34.0
+ollama==0.4.7
+pydantic==2.10.6
+jsonschema==4.23.0
+numpy==1.26.4
