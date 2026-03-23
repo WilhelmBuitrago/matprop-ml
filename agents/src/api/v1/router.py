@@ -1,7 +1,6 @@
 from fastapi import APIRouter, FastAPI
-from .scheme import IntentionRequest, CompletionRequest
+from .scheme import CompletionRequest
 from .service import (
-    PlanningService,
     ChatService,
     InfoService,
     LoadModelsService,
@@ -19,8 +18,6 @@ logger = logging.getLogger(__name__)
 # Initialization
 # -------------------------------------------------
 info_service: InfoService | None = None
-planning_service: PlanningService | None = None
-chat_service: ChatService | None = None
 
 
 def _prefer_gpu_enabled() -> bool:
@@ -51,7 +48,7 @@ def _detect_gpu_available() -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global planning_service, info_service, chat_service
+    global info_service
     keep_alive = resolve_keep_alive()
     gpu_requested = _prefer_gpu_enabled()
     gpu_detected = _detect_gpu_available()
@@ -68,24 +65,16 @@ async def lifespan(app: FastAPI):
 
     load_models_service = LoadModelsService()
     load_models_service.download_models()
-    planning_service = PlanningService()
     info_service = InfoService()
-    chat_service = ChatService()
     yield
 
 
 router = APIRouter()
 
 
-@router.post("/intention")
-def get_intentions(request: IntentionRequest):
-    response = planning_service.plan(request)
-    return response
-
-
 @router.post("/completions")
 def get_completions(request: CompletionRequest):
-    response = chat_service.chat(request)
+    response = ChatService().chat(request)
     return response
 
 

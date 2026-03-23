@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from typing import List, Dict
 
 
 class CompletionRequest(BaseModel):
@@ -12,22 +12,3 @@ class InstructRequest(BaseModel):
     prompt: str
     temperature: float = 0.7
     max_tokens: int = 512
-
-
-class PlanStep(BaseModel):
-    tool: str
-    arguments: Dict[str, Any]
-
-
-class IntentionRequest(BaseModel):
-    model_name: str
-    prompt: str
-    max_tokens: int = 256
-
-
-class ExecutionPlan(BaseModel):
-    steps: List[PlanStep]
-
-
-class PolicyOutputError(RuntimeError):
-    pass

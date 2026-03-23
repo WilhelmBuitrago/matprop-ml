@@ -13,8 +13,8 @@ El foco del proyecto no es académico, sino **utilitario**: permitir que un usua
 - Modelo: 🔗 `WilhelmBuitrago/llamat-3-chat-8b` (Ollama)
 
 🧠 **Orquestación inteligente de herramientas**  
-- Planeación automática mediante **Qwen2.5‑7B‑Instruct**.  
-- El modelo decide *qué hacer*, *en qué orden* y *con qué argumentos*.
+- En `v2`, el agente iterativo decide acciones con policy, evaluator y presupuesto.
+- En `v1`, el flujo es lineal: `query -> chat_model -> response`.
 
 🧰 **Herramientas disponibles**  
 - 🔍 `search_materials` (por ID o fórmula química)  
@@ -63,15 +63,9 @@ El sistema sigue una arquitectura **multi‑modelo por roles**:
 ├── agents/
 │   └── src/api/v1/service.py
 │       ├── LoadModelsService       # Descarga automática de modelos
-│       ├── PlanningService         # Qwen2.5 (planner)
 │       ├── ChatService             # LLaMat‑3 (chat)
 │       ├── CifService              # Generación CIF
 │       └── InfoService             # Información del proyecto
-│
-├── backend_llm/
-│   └── src/
-│       ├── chat_agent.py           # Backend de conversación
-│       └── config.py               # Configuracion de cache de conversacion
 │
 ├── frontend/
 │   ├── src/app/
@@ -110,7 +104,7 @@ docker compose up --build
 Servicios:
 - Ollama
 - Agent‑Core
-- Agent‑Policy (planner)
+- Agents Runtime (completions)
 
 Los modelos se descargan automáticamente si no existen.
 

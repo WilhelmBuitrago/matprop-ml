@@ -19,4 +19,4 @@ WORKDIR /app
 COPY /src /app/ 
 
 EXPOSE 8003
-CMD ["sh", "-c", "ollama serve & uvicorn api.app:app --host 0.0.0.0 --port 8003"]
+CMD ["sh", "-c", "ollama serve & sleep 4; ollama pull ${AGENTS_DECISION_MODEL:-yasserrmd/Qwen2.5-7B-Instruct-1M}; uvicorn api.app:app --host 0.0.0.0 --port 8003"]

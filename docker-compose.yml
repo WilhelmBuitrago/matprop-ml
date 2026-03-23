@@ -54,7 +54,7 @@ services:
   #  ports:
   #    - "${BACKEND_ML_PORT}:8000"
   #  volumes:
-  #    - ./backend_llm/src/data:/app/data:ro
+  #    - ./backend_ml/src/data:/app/data:ro
   #    - ./backend_ml/src:/app/src:ro
   #  depends_on:
   #    - llm-model
@@ -65,51 +65,6 @@ services:
   #    timeout: 5s
   #    retries: 3
 
-  backend-llm:
-    build:
-      context: ./backend_llm
-      dockerfile: Dockerfile
-    container_name: backend-llm
-    ports:
-      - "${BACKEND_LLM_PORT}:8001"
-    volumes:
-      - ./backend_llm/src:/app:ro
-    #depends_on:
-      #- llamat2-chat
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8001/v1/health || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    networks:
-      - matprop_net
-
-
-  #llamat2-chat:
-  #  build:
-  #    context: ./llamat2-chat
-  #    dockerfile: Dockerfile
-  #  container_name: llamat2-chat
-  #  env_file: .env
-  #  ports:
-  #    - "${LLAMAT2_CHAT_PORT}:8002"
-    # Soporte GPU si existe (NVIDIA runtime)
-  #  deploy:
-  #    resources:
-  #      reservations:
-  #        devices:
-  #          - driver: nvidia
-  #            count: all
-  #            capabilities: [gpu]
-  #  restart: unless-stopped
-  #  healthcheck:
-  #    test: ["CMD-SHELL", "curl -f http://localhost:8002/v1/health || exit 1"]
-  #    interval: 20s
-  #    timeout: 5s
-  #    retries: 5
-  #  networks:
-  #    - matprop_net
   frontend:
     build:
       context: ./frontend

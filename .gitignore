@@ -216,3 +216,5 @@ npm-debug.log
 llamat2-chat/
 DOCUMENTATION_SCHEMA.md
 Problems.md
+docker-compose-development.yml
+services/
