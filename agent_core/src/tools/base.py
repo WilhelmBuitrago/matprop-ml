@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 
-from api.v3.state import AgentState
+if TYPE_CHECKING:
+    from api.v3.state import AgentState
 
 
 @dataclass(frozen=True)
@@ -24,7 +26,7 @@ class ToolContract:
     input_schema: Dict[str, Any] = {}
     output_schema: Dict[str, Any] = {}
 
-    def preconditions(self, state: AgentState) -> Tuple[bool, str]:
+    def preconditions(self, state: "AgentState") -> Tuple[bool, str]:
         """Return tool availability decision and blocking reason."""
         return True, ""
 
@@ -50,7 +52,7 @@ class ToolRegistry:
             raise KeyError(f"Unknown tool: {tool_name}")
         return self._tools[tool_name]
 
-    def can_run(self, tool_name: str, state: AgentState) -> bool:
+    def can_run(self, tool_name: str, state: "AgentState") -> bool:
         tool = self.get(tool_name)
         ok, _ = tool.preconditions(state)
         return ok
@@ -85,6 +87,23 @@ class ToolRegistry:
         self, value: Any, schema: Dict[str, Any], path: str
     ) -> Tuple[bool, str]:
         """Validate value against a strict subset of JSON Schema used by v3."""
+        one_of = schema.get("oneOf")
+        if isinstance(one_of, list):
+            valid_count = 0
+            last_error = ""
+            for idx, candidate in enumerate(one_of):
+                ok, err = self._validate_against_schema(value, candidate, path)
+                if ok:
+                    valid_count += 1
+                else:
+                    last_error = f"candidate {idx}: {err}"
+            if valid_count != 1:
+                return (
+                    False,
+                    f"{path}: expected exactly one schema in oneOf to match; "
+                    f"matched={valid_count}. {last_error}",
+                )
+
         expected_type = schema.get("type")
         if isinstance(expected_type, list):
             type_match = any(self._type_ok(value, t) for t in expected_type)
@@ -97,11 +116,22 @@ class ToolRegistry:
             if len(value) < int(schema["minItems"]):
                 return False, f"{path}: expected at least {schema['minItems']} items"
 
+        if "maxItems" in schema and isinstance(value, list):
+            if len(value) > int(schema["maxItems"]):
+                return False, f"{path}: expected at most {schema['maxItems']} items"
+
         if "minProperties" in schema and isinstance(value, dict):
             if len(value.keys()) < int(schema["minProperties"]):
                 return (
                     False,
                     f"{path}: expected at least {schema['minProperties']} properties",
+                )
+
+        if "maxProperties" in schema and isinstance(value, dict):
+            if len(value.keys()) > int(schema["maxProperties"]):
+                return (
+                    False,
+                    f"{path}: expected at most {schema['maxProperties']} properties",
                 )
 
         if "minimum" in schema and isinstance(value, (int, float)):
@@ -115,6 +145,19 @@ class ToolRegistry:
         enum_values = schema.get("enum")
         if enum_values is not None and value not in enum_values:
             return False, f"{path}: value {value!r} not in enum"
+
+        if "minLength" in schema and isinstance(value, str):
+            if len(value) < int(schema["minLength"]):
+                return False, f"{path}: expected minLength {schema['minLength']}"
+
+        if "maxLength" in schema and isinstance(value, str):
+            if len(value) > int(schema["maxLength"]):
+                return False, f"{path}: expected maxLength {schema['maxLength']}"
+
+        pattern = schema.get("pattern")
+        if pattern is not None and isinstance(value, str):
+            if re.fullmatch(pattern, value) is None:
+                return False, f"{path}: value {value!r} does not match pattern"
 
         if isinstance(value, dict):
             required = schema.get("required", [])

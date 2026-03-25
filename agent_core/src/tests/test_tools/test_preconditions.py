@@ -38,7 +38,7 @@ def test_constraints_tool_requires_constraints_and_materials():
     state = _state()
     assert TOOL_REGISTRY.can_run("validate_material_constraints", state) is False
 
-    state.constraints = {"band_gap": {"min": 0.5, "max": 2.0}}
+    state.constraints = {"band_gap": [0.5, 2.0]}
     state.materials_found.append(
         MaterialRecord(material_id="mp-149", formula="Si", properties={})
     )

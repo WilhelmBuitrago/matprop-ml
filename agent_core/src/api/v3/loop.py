@@ -24,6 +24,9 @@ def apply_tool_result(
                         "density": row.get("density"),
                         "is_stable": row.get("is_stable"),
                         "is_metal": row.get("is_metal"),
+                        "energy_above_hull": row.get("energy_above_hull"),
+                        "formation_energy": row.get("formation_energy"),
+                        "volume": row.get("volume"),
                     },
                 )
             )
@@ -109,7 +112,7 @@ def run_loop(
 
         started = time.perf_counter()
         tool = registry.get(decision.tool_name)
-        result = tool.execute(**decision.tool_arguments)
+        result = tool.execute(**decision.tool_arguments, agent_state=state)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
 
         if result.status != "success":

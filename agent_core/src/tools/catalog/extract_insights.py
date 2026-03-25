@@ -85,7 +85,7 @@ class ExtractDocumentInsightsTool(ToolContract):
         try:
             messages = [{"role": "user", "content": prompt}]
             response = requests.post(
-                f"{self.model_url}/v1/completions",
+                f"{self.model_url}/v2/completions",
                 json={
                     "history": messages_to_history(messages),
                     "temperature": 0.1,

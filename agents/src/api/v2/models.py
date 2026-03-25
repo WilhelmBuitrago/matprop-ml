@@ -3,7 +3,7 @@ import logging
 import os
 from typing import Any, Dict
 
-import ollama
+from ...services.ollama_client import OllamaClient
 
 from .scheme import (
     DecisionModelInput,
@@ -35,12 +35,13 @@ def _extract_json_dict(raw: str) -> Dict[str, Any]:
 
 
 class DecisionModel:
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, ollama_client: OllamaClient):
         self.model_name = model_name
+        self.ollama_client = ollama_client
 
     def call(self, payload: DecisionModelInput) -> DecisionModelOutput:
         prompt = self._build_prompt(payload)
-        response = ollama.chat(
+        response = self.ollama_client.chat(
             model=self.model_name,
             messages=[
                 {
@@ -112,12 +113,13 @@ Output JSON schema:
 
 
 class EvaluatorModel:
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, ollama_client: OllamaClient):
         self.model_name = model_name
+        self.ollama_client = ollama_client
 
     def call(self, payload: EvaluatorModelInput) -> EvaluatorModelOutput:
         prompt = self._build_prompt(payload)
-        response = ollama.chat(
+        response = self.ollama_client.chat(
             model=self.model_name,
             messages=[
                 {
@@ -167,5 +169,10 @@ Output JSON schema:
 
 def build_models() -> tuple[DecisionModel, EvaluatorModel]:
     model_name = os.getenv("AGENTS_DECISION_MODEL", "yasserrmd/Qwen2.5-7B-Instruct-1M")
+    keep_alive = os.getenv("AGENTS_OLLAMA_KEEP_ALIVE", "0s")
+    ollama_client = OllamaClient(keep_alive=keep_alive)
     logger.info("[agents-v2] using model=%s", model_name)
-    return DecisionModel(model_name=model_name), EvaluatorModel(model_name=model_name)
+    return (
+        DecisionModel(model_name=model_name, ollama_client=ollama_client),
+        EvaluatorModel(model_name=model_name, ollama_client=ollama_client),
+    )

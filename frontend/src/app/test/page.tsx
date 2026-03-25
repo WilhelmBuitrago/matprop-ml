@@ -9,7 +9,7 @@ export default function TestPage() {
 
   useEffect(() => {
 
-    fetch(`${ENV.API_URL}/v1/health`)
+    fetch(`${ENV.API_URL}/v2/health`)
       .then(r => r.json())
       .then(setData)
       .catch(console.error);

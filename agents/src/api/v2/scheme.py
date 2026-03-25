@@ -3,6 +3,17 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
+class CompletionRequest(BaseModel):
+    history: List[Dict[str, str]]
+    temperature: float = 0.7
+    max_tokens: int = 512
+
+
+class CifRequest(BaseModel):
+    compound_name: str
+    max_tokens: int = 512
+
+
 class DecisionModelInput(BaseModel):
     query: str
     intent: str

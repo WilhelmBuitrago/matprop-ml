@@ -27,7 +27,7 @@ class CompletionServiceV3:
         self.evaluator = Evaluator()
         self.context_builder = ContextBuilder()
         self.chat_api = (
-            os.getenv("AGENTS_URL", "http://agents:8003") + "/v1/completions"
+            os.getenv("AGENTS_URL", "http://agents:8003") + "/v2/completions"
         )
 
         trace_dir = os.getenv("AGENT_TRACE_DIR", "agent_core/data/traces")

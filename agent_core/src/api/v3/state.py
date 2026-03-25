@@ -56,7 +56,7 @@ class BudgetState:
     max_iterations: int = 8
     max_tool_calls: int = 8
     max_context_tokens: int = 2048
-    max_wall_time_ms: int = 30000
+    max_wall_time_ms: int = 80000
 
     iterations_used: int = 0
     tool_calls_used: int = 0

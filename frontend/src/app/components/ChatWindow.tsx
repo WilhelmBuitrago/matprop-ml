@@ -6,13 +6,13 @@ import { ENV } from '@/env.client'
 import ChatMessage from "./ChatMessage";
 import ChatInput from "./ChatInput";
 
-const resolveChatEndpoint = (moreContextEnabled: boolean) => {
+const resolveChatEndpoint = () => {
   const rawBase = ENV.API_URL;
   let trimmedBase = rawBase;
   while (trimmedBase.endsWith("/")) {
     trimmedBase = trimmedBase.slice(0, -1);
   }
-  const versionPath = moreContextEnabled ? "/v2/completions" : "/v1/completions";
+  const versionPath = "/v2/completions";
   return trimmedBase ? `${trimmedBase}${versionPath}` : versionPath;
 };
 
@@ -20,7 +20,7 @@ interface Message {
   id: string;
   text: string;
   sender: "user" | "agent" | "system";
-  mode?: "v1" | "v2";
+  mode?: "v2";
   kind?: "default" | "thinking" | "status";
 }
 
@@ -41,156 +41,117 @@ export default function ChatWindow() {
   const hasUserMessage = messages.some(message => message.sender === "user");
 
   const sendMessage = async (text: string) => {
-    const mode: "v1" | "v2" = moreContextEnabled ? "v2" : "v1";
+    const mode: "v2" = "v2";
     const userMessage: Message = { id: createMessageId(), text, sender: "user" };
     setMessages(prev => [...prev, userMessage]);
     setLoading(true);
 
     try {
-      const endpoint = resolveChatEndpoint(moreContextEnabled);
+      const endpoint = resolveChatEndpoint();
 
       let responseText = "";
 
-      if (mode === "v1") {
-        const thinkingId = createMessageId();
-        setMessages(prev => [
-          ...prev,
-          { id: thinkingId, text: "", sender: "agent", mode: "v1", kind: "thinking" },
-        ]);
+      const statusId = createMessageId();
+      setMessages(prev => [
+        ...prev,
+        {
+          id: statusId,
+          text: "Iniciando analisis del contexto...",
+          sender: "agent",
+          mode: "v2",
+          kind: "status",
+        },
+      ]);
 
-        const response = await fetch(endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt: text }),
-        });
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify({ prompt: text, stream: true }),
+      });
 
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-
-        const data = await response.json();
-        if (!data?.choices?.length) {
-          throw new Error("Invalid completion response");
-        }
-
-        responseText = data.choices[0].text;
-
-        setMessages(prev =>
-          prev.map(message =>
-            message.id === thinkingId
-              ? {
-                  id: thinkingId,
-                  text: "",
-                  sender: "agent",
-                  mode: "v1",
-                  kind: "default",
-                }
-              : message
-          )
-        );
-      } else {
-        const statusId = createMessageId();
-        setMessages(prev => [
-          ...prev,
-          {
-            id: statusId,
-            text: "Iniciando analisis del contexto...",
-            sender: "agent",
-            mode: "v2",
-            kind: "status",
-          },
-        ]);
-
-        const response = await fetch(endpoint, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "text/event-stream",
-          },
-          body: JSON.stringify({ prompt: text, stream: true }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-
-        if (!response.body) {
-          throw new Error("Streaming body not available");
-        }
-
-        const decoder = new TextDecoder("utf-8");
-        const reader = response.body.getReader();
-        let buffer = "";
-
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) {
-            break;
-          }
-
-          buffer += decoder.decode(value, { stream: true });
-          buffer = buffer.replace(/\r/g, "");
-
-          let eventSeparator = buffer.indexOf("\n\n");
-          while (eventSeparator !== -1) {
-            const rawEvent = buffer.slice(0, eventSeparator);
-            buffer = buffer.slice(eventSeparator + 2);
-
-            const lines = rawEvent.split("\n");
-            let eventType = "message";
-            const dataLines: string[] = [];
-
-            for (const line of lines) {
-              if (line.startsWith("event:")) {
-                eventType = line.slice("event:".length).trim();
-              }
-              if (line.startsWith("data:")) {
-                dataLines.push(line.slice("data:".length).trim());
-              }
-            }
-
-            if (dataLines.length > 0) {
-              try {
-                const payload = JSON.parse(dataLines.join(""));
-                if (eventType === "status" && payload?.text) {
-                  setMessages(prev =>
-                    prev.map(message =>
-                      message.id === statusId
-                        ? {
-                            ...message,
-                            text: String(payload.text),
-                          }
-                        : message
-                    )
-                  );
-                }
-
-                if (eventType === "final" && payload?.text) {
-                  responseText = String(payload.text);
-                }
-              } catch {
-                // Ignore malformed chunks and keep reading stream events.
-              }
-            }
-
-            eventSeparator = buffer.indexOf("\n\n");
-          }
-        }
-
-        setMessages(prev =>
-          prev.map(message =>
-            message.id === statusId
-              ? {
-                  id: statusId,
-                  text: "",
-                  sender: "agent",
-                  mode: "v2",
-                  kind: "default",
-                }
-              : message
-          )
-        );
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
       }
+
+      if (!response.body) {
+        throw new Error("Streaming body not available");
+      }
+
+      const decoder = new TextDecoder("utf-8");
+      const reader = response.body.getReader();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        buffer = buffer.replace(/\r/g, "");
+
+        let eventSeparator = buffer.indexOf("\n\n");
+        while (eventSeparator !== -1) {
+          const rawEvent = buffer.slice(0, eventSeparator);
+          buffer = buffer.slice(eventSeparator + 2);
+
+          const lines = rawEvent.split("\n");
+          let eventType = "message";
+          const dataLines: string[] = [];
+
+          for (const line of lines) {
+            if (line.startsWith("event:")) {
+              eventType = line.slice("event:".length).trim();
+            }
+            if (line.startsWith("data:")) {
+              dataLines.push(line.slice("data:".length).trim());
+            }
+          }
+
+          if (dataLines.length > 0) {
+            try {
+              const payload = JSON.parse(dataLines.join(""));
+              if (eventType === "status" && payload?.text) {
+                setMessages(prev =>
+                  prev.map(message =>
+                    message.id === statusId
+                      ? {
+                          ...message,
+                          text: String(payload.text),
+                        }
+                      : message
+                  )
+                );
+              }
+
+              if (eventType === "final" && payload?.text) {
+                responseText = String(payload.text);
+              }
+            } catch {
+              // Ignore malformed chunks and keep reading stream events.
+            }
+          }
+
+          eventSeparator = buffer.indexOf("\n\n");
+        }
+      }
+
+      setMessages(prev =>
+        prev.map(message =>
+          message.id === statusId
+            ? {
+                id: statusId,
+                text: "",
+                sender: "agent",
+                mode: "v2",
+                kind: "default",
+              }
+            : message
+        )
+      );
 
       if (!responseText) {
         setMessages(prev => [

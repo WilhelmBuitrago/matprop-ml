@@ -31,7 +31,7 @@ services:
       depends_on:
         - agent-core
       healthcheck:
-        test: ["CMD-SHELL", "curl -f http://localhost:8003/v1/health || exit 1"]
+        test: ["CMD-SHELL", "curl -f http://localhost:8003/v2/health || exit 1"]
         interval: 30s
         timeout: 5s
         retries: 3

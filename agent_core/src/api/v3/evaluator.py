@@ -47,7 +47,7 @@ class Evaluator:
                 "max_tokens": 300,
             }
             response = requests.post(
-                f"{self.model_url}/v1/completions",
+                f"{self.model_url}/v2/completions",
                 json=payload,
                 headers={"Content-Type": "application/json"},
             )

@@ -177,10 +177,7 @@ class PolicyEngine:
                 "properties_to_compare": ["band_gap", "density", "is_stable"],
             }
         if tool_name == "validate_material_constraints":
-            return {
-                "constraints": state.constraints
-                or {"band_gap": {"min": 0.5, "max": 2.5}}
-            }
+            return {"constraints": state.constraints}
         if tool_name == "search_scientific_documents":
             hint = state.materials_found[0].formula if state.materials_found else None
             return {"query": state.query, "material_focus": hint, "max_results": 5}

@@ -24,7 +24,7 @@ def fake_requests_post(monkeypatch):
 
     def _post(url, json=None, headers=None, timeout=None):
         if (
-            url.endswith("/v1/completions")
+            url.endswith("/v2/completions")
             and json
             and "strict json" in str(json).lower()
         ):
@@ -35,7 +35,7 @@ def fake_requests_post(monkeypatch):
                 }
             )
 
-        if url.endswith("/v1/completions"):
+        if url.endswith("/v2/completions"):
             return _Resp("Final synthesized answer.")
 
         return _Resp({"response": "ok"})
