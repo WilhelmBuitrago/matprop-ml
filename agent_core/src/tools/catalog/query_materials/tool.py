@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from tools.base import ToolContract, ToolResult
@@ -13,6 +14,9 @@ from .schema import INPUT_SCHEMA, OUTPUT_SCHEMA
 
 if TYPE_CHECKING:
     from api.v3.state import AgentState
+
+
+logger = logging.getLogger(__name__)
 
 
 class QueryMaterialsDatabaseTool(ToolContract):
@@ -30,15 +34,30 @@ class QueryMaterialsDatabaseTool(ToolContract):
         return True, ""
 
     def execute(self, **kwargs: Any) -> ToolResult:
+        logger.info(
+            "query_materials.execute start keys=%s",
+            sorted(kwargs.keys()),
+        )
         try:
             if self._client is None:
                 self._client = MaterialsProjectClient()
             request = build_query_request(kwargs)
+            logger.info(
+                "query_materials request mode=%s value=%s limit=%s filters=%s ranking=%s",
+                request.mode,
+                request.value,
+                request.limit,
+                bool(request.filters),
+                bool(request.ranking),
+            )
             materials = self._client.query(request)
+            logger.info("query_materials fetched=%d", len(materials))
             materials = apply_filters(materials, request.filters)
+            logger.info("query_materials after_filters=%d", len(materials))
             materials = rank_materials(materials, request.ranking)
             materials = materials[: request.limit]
             payload_materials = [self._material_to_payload(item) for item in materials]
+            logger.info("query_materials success count=%d", len(payload_materials))
             return ToolResult(
                 status="success",
                 payload={
@@ -47,6 +66,7 @@ class QueryMaterialsDatabaseTool(ToolContract):
                 },
             )
         except QueryValidationError as exc:
+            logger.warning("query_materials validation_error=%s", exc)
             return ToolResult(
                 status="error",
                 payload={},
@@ -54,6 +74,7 @@ class QueryMaterialsDatabaseTool(ToolContract):
                 error_detail=str(exc),
             )
         except QueryAPIError as exc:
+            logger.error("query_materials api_error=%s", exc)
             return ToolResult(
                 status="error",
                 payload={},
@@ -61,6 +82,7 @@ class QueryMaterialsDatabaseTool(ToolContract):
                 error_detail=str(exc),
             )
         except Exception as exc:  # pragma: no cover
+            logger.exception("query_materials unexpected_error")
             return ToolResult(
                 status="error",
                 payload={},

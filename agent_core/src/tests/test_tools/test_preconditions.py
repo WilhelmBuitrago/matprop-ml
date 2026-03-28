@@ -24,14 +24,14 @@ def test_compare_materials_precondition_requires_two_materials():
     assert TOOL_REGISTRY.can_run("compare_materials", state) is True
 
 
-def test_extract_insights_requires_documents():
+def test_document_rag_requires_documents():
     state = _state()
-    assert TOOL_REGISTRY.can_run("extract_document_insights", state) is False
+    assert TOOL_REGISTRY.can_run("document_rag", state) is False
 
     state.documents.append(
         DocumentRecord(title="paper", source="arXiv", relevance_score=0.9, abstract="a")
     )
-    assert TOOL_REGISTRY.can_run("extract_document_insights", state) is True
+    assert TOOL_REGISTRY.can_run("document_rag", state) is True
 
 
 def test_constraints_tool_requires_constraints_and_materials():

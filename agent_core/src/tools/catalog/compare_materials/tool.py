@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from api.v3.state import AgentState
 from tools.base import ToolContract, ToolResult
+
+
+logger = logging.getLogger(__name__)
 
 
 class CompareMaterialsTool(ToolContract):
@@ -55,11 +59,25 @@ class CompareMaterialsTool(ToolContract):
 
     def preconditions(self, state: AgentState):
         if len(state.materials_found) < 2:
+            logger.info(
+                "compare_materials precondition failed materials_found=%d",
+                len(state.materials_found),
+            )
             return False, "requires_at_least_two_materials"
+        logger.info(
+            "compare_materials precondition passed materials_found=%d",
+            len(state.materials_found),
+        )
         return True, ""
 
     def execute(self, **kwargs: Any) -> ToolResult:
         material_ids = kwargs.get("material_ids", [])
+        properties = kwargs.get("properties_to_compare", [])
+        logger.info(
+            "compare_materials execute material_ids=%s properties=%s",
+            material_ids,
+            properties,
+        )
         ranked = []
         for idx, material_id in enumerate(material_ids, start=1):
             ranked.append(
@@ -69,6 +87,7 @@ class CompareMaterialsTool(ToolContract):
                     "rank": idx,
                 }
             )
+        logger.info("compare_materials success compared=%d", len(ranked))
         return ToolResult(
             status="success",
             payload={

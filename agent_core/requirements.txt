@@ -13,3 +13,4 @@ pydantic
 pymatgen  #==2024.10.29 #2024.7.18
 mp_api  #==0.45.13
 numpy #<2.0.0
+PyMuPDF

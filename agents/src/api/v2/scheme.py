@@ -7,11 +7,40 @@ class CompletionRequest(BaseModel):
     history: List[Dict[str, str]]
     temperature: float = 0.7
     max_tokens: int = 512
+    model_name: str | None = None
+    stop_tokens: List[str] = Field(default_factory=list)
 
 
 class CifRequest(BaseModel):
     compound_name: str
     max_tokens: int = 512
+
+
+class CrystalSpecExtractionRequest(BaseModel):
+    query: str
+    deterministic_spec: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CrystalCompletionRequest(BaseModel):
+    system_message: str
+    user_prompt: str
+    temperature: float = 0.3
+    max_tokens: int = 768
+    stop_tokens: List[str] = Field(default_factory=list)
+    model_name: str | None = None
+
+
+class InsightRequest(BaseModel):
+    query: str
+    chunk: str
+    title: str = ""
+    section: str = ""
+    page: int = 0
+    max_tokens: int = 180
+
+
+class InsightResponse(BaseModel):
+    insights: List[str] = Field(default_factory=list)
 
 
 class DecisionModelInput(BaseModel):

@@ -3,7 +3,7 @@ __all__ = [
     "CompareMaterialsTool",
     "ValidateMaterialConstraintsTool",
     "SearchScientificDocumentsTool",
-    "ExtractDocumentInsightsTool",
+    "DocumentRAGTool",
     "GenerateCrystalStructureTool",
 ]
 
@@ -22,15 +22,15 @@ def __getattr__(name: str):
 
         return ValidateMaterialConstraintsTool
     if name == "SearchScientificDocumentsTool":
-        from .search_documents import SearchScientificDocumentsTool
+        from .search_scientific_documents import SearchScientificDocumentsTool
 
         return SearchScientificDocumentsTool
-    if name == "ExtractDocumentInsightsTool":
-        from .extract_insights import ExtractDocumentInsightsTool
+    if name == "DocumentRAGTool":
+        from .document_rag import DocumentRAGTool
 
-        return ExtractDocumentInsightsTool
+        return DocumentRAGTool
     if name == "GenerateCrystalStructureTool":
-        from .generate_structure import GenerateCrystalStructureTool
+        from .generate_structure.tool import GenerateCrystalStructureTool
 
         return GenerateCrystalStructureTool
     raise AttributeError(f"module 'tools.catalog' has no attribute {name!r}")

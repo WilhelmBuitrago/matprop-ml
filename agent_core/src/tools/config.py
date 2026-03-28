@@ -1,7 +1,7 @@
 from tools.base import ToolRegistry
 from tools.catalog import (
     CompareMaterialsTool,
-    ExtractDocumentInsightsTool,
+    DocumentRAGTool,
     GenerateCrystalStructureTool,
     QueryMaterialsDatabaseTool,
     SearchScientificDocumentsTool,
@@ -20,7 +20,7 @@ TOOL_REGISTRY.register(QueryMaterialsDatabaseTool())
 TOOL_REGISTRY.register(CompareMaterialsTool())
 TOOL_REGISTRY.register(ValidateMaterialConstraintsTool())
 TOOL_REGISTRY.register(SearchScientificDocumentsTool())
-TOOL_REGISTRY.register(ExtractDocumentInsightsTool())
+TOOL_REGISTRY.register(DocumentRAGTool())
 TOOL_REGISTRY.register(GenerateCrystalStructureTool())
 
 

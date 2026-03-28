@@ -143,6 +143,9 @@ class CompletionServiceV3:
             "materials_found": len(state.materials_found),
             "documents_found": len(state.documents),
             "insights_found": len(state.extracted_insights),
+            "confidence_trajectory": state.confidence_trajectory,
+            "risk_trajectory": state.risk_trajectory,
+            "evaluation_trace": state.evaluation_trace,
             "evaluator_feedback": [f.__dict__ for f in state.evaluator_feedback[-3:]],
         }
         return CompletionResponseV3(
@@ -163,6 +166,9 @@ class CompletionServiceV3:
             "tool_calls": [call.__dict__ for call in state.tool_calls],
             "policy_trace": state.policy_trace,
             "evaluator_feedback": [fb.__dict__ for fb in state.evaluator_feedback],
+            "confidence_trajectory": state.confidence_trajectory,
+            "risk_trajectory": state.risk_trajectory,
+            "evaluation_trace": state.evaluation_trace,
             "materials_found": [m.__dict__ for m in state.materials_found],
             "documents": [d.__dict__ for d in state.documents],
             "extracted_insights": state.extracted_insights,

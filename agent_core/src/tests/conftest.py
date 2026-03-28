@@ -1,6 +1,7 @@
 import os
 import sys
 from typing import Any, Dict
+import logging
 
 import pytest
 
@@ -23,6 +24,9 @@ def fake_requests_post(monkeypatch):
             return self._payload
 
     def _post(url, json=None, headers=None, timeout=None):
+        if url.endswith("/v2/insights"):
+            return _Resp({"insights": ["Fact A", "Fact B"]})
+
         if (
             url.endswith("/v2/completions")
             and json
@@ -30,8 +34,9 @@ def fake_requests_post(monkeypatch):
         ):
             return _Resp(
                 {
-                    "response": '{"sufficient": false, "confidence": 0.65, '
-                    '"missing_information": ["comparison"], "reasoning": "need more evidence"}'
+                    "response": '{"verdict": "insufficient", "confidence": 0.65, '
+                    '"missing_information": ["comparison"], "risk_if_stop": "high", '
+                    '"can_answer": false, "reasoning": "need more evidence"}'
                 }
             )
 
@@ -59,3 +64,28 @@ def make_service(monkeypatch, tmp_path, fake_requests_post):
         return CompletionServiceV3()
 
     return _factory
+
+
+@pytest.fixture
+def docker_env_for_tools(monkeypatch):
+    """Set service URLs to docker-compose defaults for tool tests."""
+
+    monkeypatch.setenv("AGENTS_URL", "http://agents:8003")
+    monkeypatch.setenv("AGENTS_SERVICE_URL", "http://agents:8003")
+    monkeypatch.setenv("SEMANTIC_SCHOLAR_API_KEY", "test-api-key")
+    monkeypatch.setenv("CROSSREF_EMAIL", "tests@matprop.local")
+    return {
+        "AGENTS_URL": "http://agents:8003",
+        "AGENTS_SERVICE_URL": "http://agents:8003",
+        "SEMANTIC_SCHOLAR_API_KEY": "test-api-key",
+        "CROSSREF_EMAIL": "tests@matprop.local",
+    }
+
+
+@pytest.fixture
+def tool_test_logger(caplog):
+    """Capture informative logs for comprehensive tool tests."""
+
+    logger = logging.getLogger("tests.tools")
+    caplog.set_level(logging.INFO)
+    return logger

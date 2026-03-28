@@ -3,27 +3,41 @@ import os
 import shutil
 import subprocess
 from contextlib import asynccontextmanager
+from typing import List
 
 from fastapi import APIRouter, FastAPI, HTTPException
+from pydantic import BaseModel, Field
 
-from .models import build_models
-from .routes_embeddings import router as embeddings_router
 from .scheme import (
     CompletionRequest,
     CifRequest,
+    CrystalCompletionRequest,
+    CrystalSpecExtractionRequest,
     DecisionModelInput,
     DecisionModelOutput,
     EvaluatorModelInput,
     EvaluatorModelOutput,
+    InsightRequest,
+    InsightResponse,
 )
 from .service import V2RuntimeServices, resolve_keep_alive
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-_decision_model, _evaluator_model = build_models()
-router.include_router(embeddings_router)
 runtime_services: V2RuntimeServices | None = None
+
+
+class EmbeddingRequest(BaseModel):
+    """Request body for embeddings endpoint."""
+
+    texts: List[str] = Field(..., min_items=1, description="List of texts to embed")
+
+
+class EmbeddingResponse(BaseModel):
+    """Response body for embeddings endpoint."""
+
+    embeddings: List[List[float]] = Field(..., description="Embedding vectors")
 
 
 def _prefer_gpu_enabled() -> bool:
@@ -78,8 +92,10 @@ async def lifespan(app: FastAPI):
 
 @router.post("/decision", response_model=DecisionModelOutput)
 def decision(payload: DecisionModelInput):
+    if runtime_services is None:
+        raise HTTPException(status_code=503, detail="runtime_services_unavailable")
     try:
-        result = _decision_model.call(payload)
+        result = runtime_services.decision.call(payload)
         return result
     except Exception as exc:
         logger.exception("decision_model call failed")
@@ -90,8 +106,10 @@ def decision(payload: DecisionModelInput):
 
 @router.post("/evaluate", response_model=EvaluatorModelOutput)
 def evaluate(payload: EvaluatorModelInput):
+    if runtime_services is None:
+        raise HTTPException(status_code=503, detail="runtime_services_unavailable")
     try:
-        result = _evaluator_model.call(payload)
+        result = runtime_services.evaluator.call(payload)
         return result
     except Exception as exc:
         logger.exception("evaluator_model call failed")
@@ -109,9 +127,47 @@ def get_completions(request: CompletionRequest):
             history=request.history,
             temperature=request.temperature,
             max_tokens=request.max_tokens,
+            model_name=request.model_name,
+            stop_tokens=request.stop_tokens,
         )
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"chat_failed: {exc}") from exc
+
+
+@router.post("/crystal/spec")
+def extract_crystal_spec(request: CrystalSpecExtractionRequest):
+    if runtime_services is None:
+        raise HTTPException(status_code=503, detail="runtime_services_unavailable")
+    try:
+        parsed = runtime_services.crystal_spec.extract(
+            query=request.query,
+            deterministic_spec=request.deterministic_spec,
+        )
+        return {"spec": parsed}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail=f"crystal_spec_failed: {exc}"
+        ) from exc
+
+
+@router.post("/crystal/complete")
+def complete_crystal(request: CrystalCompletionRequest):
+    if runtime_services is None:
+        raise HTTPException(status_code=503, detail="runtime_services_unavailable")
+    try:
+        text = runtime_services.cif.generate_from_prompt(
+            system_message=request.system_message,
+            user_prompt=request.user_prompt,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+            model_name=request.model_name,
+            stop_tokens=request.stop_tokens,
+        )
+        return {"raw_generation": text}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail=f"crystal_complete_failed: {exc}"
+        ) from exc
 
 
 @router.get("/info")
@@ -138,3 +194,44 @@ def get_cif(request: CifRequest):
         return {"cif": cif}
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"cif_failed: {exc}") from exc
+
+
+@router.post("/embeddings", response_model=EmbeddingResponse)
+async def embed_texts(request: EmbeddingRequest) -> EmbeddingResponse:
+    if runtime_services is None:
+        raise HTTPException(status_code=503, detail="runtime_services_unavailable")
+    if not request.texts:
+        raise HTTPException(status_code=400, detail="texts list cannot be empty")
+
+    try:
+        embeddings = runtime_services.embeddings.embed_texts(request.texts)
+        return EmbeddingResponse(embeddings=embeddings)
+    except RuntimeError as exc:
+        logger.error("Embedding failed: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Embedding service failed: {exc}",
+        ) from exc
+    except Exception as exc:  # pragma: no cover
+        logger.error("Unexpected embeddings error: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
+
+
+@router.post("/insights", response_model=InsightResponse)
+def extract_insights(request: InsightRequest) -> InsightResponse:
+    if runtime_services is None:
+        raise HTTPException(status_code=503, detail="runtime_services_unavailable")
+
+    try:
+        insights = runtime_services.insights.extract_insights(
+            query=request.query,
+            title=request.title,
+            section=request.section,
+            page=request.page,
+            chunk=request.chunk,
+            max_tokens=request.max_tokens,
+        )
+        return InsightResponse(insights=insights)
+    except Exception as exc:
+        logger.exception("insights extraction failed")
+        raise HTTPException(status_code=503, detail=f"insights_failed: {exc}") from exc

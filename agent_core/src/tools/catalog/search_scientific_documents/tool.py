@@ -81,6 +81,7 @@ class SearchScientificDocumentsTool(ToolContract):
     def execute(self, **kwargs: Any) -> ToolResult:
         query = str(kwargs.get("query", "")).strip()
         if not query:
+            logger.warning("search_documents validation_error empty_query")
             return ToolResult(
                 status="error",
                 payload={},
@@ -95,8 +96,16 @@ class SearchScientificDocumentsTool(ToolContract):
         max_results = int(kwargs.get("max_results", 10))
         provider_names = kwargs.get("providers") or ["arxiv", "semantic_scholar"]
         selected = [name for name in provider_names if name in self._providers]
+        logger.info(
+            "search_documents execute query_len=%d providers=%s max_results=%d material_focus=%s",
+            len(query),
+            selected,
+            max_results,
+            bool(material_focus),
+        )
 
         if not selected:
+            logger.warning("search_documents validation_error no_valid_providers")
             return ToolResult(
                 status="error",
                 payload={},
@@ -106,16 +115,21 @@ class SearchScientificDocumentsTool(ToolContract):
 
         try:
             raw_docs = self._fetch_all(selected, query=query, limit=max_results)
+            logger.info("search_documents fetched_raw=%d", len(raw_docs))
             normalized_docs = self._normalize_all(raw_docs)
+            logger.info("search_documents normalized=%d", len(normalized_docs))
             unique_docs = deduplicate(normalized_docs)
+            logger.info("search_documents deduplicated=%d", len(unique_docs))
 
             if not unique_docs:
+                logger.info("search_documents success empty_result")
                 return ToolResult(
                     status="success", payload={"documents": [], "count": 0}
                 )
 
             ranked = self._rank_documents(query=query, documents=unique_docs)
             ranked = ranked[:max_results]
+            logger.info("search_documents ranked=%d", len(ranked))
 
             payload_documents = [
                 {
@@ -140,6 +154,7 @@ class SearchScientificDocumentsTool(ToolContract):
             )
 
         except ProviderFailureError as exc:
+            logger.error("search_documents provider_failure=%s", exc)
             return ToolResult(
                 status="error",
                 payload={},
@@ -147,6 +162,7 @@ class SearchScientificDocumentsTool(ToolContract):
                 error_detail=str(exc),
             )
         except Exception as exc:  # pragma: no cover
+            logger.exception("search_documents unexpected_error")
             return ToolResult(
                 status="error",
                 payload={},

@@ -37,7 +37,7 @@ class PolicyEngine:
         "compare_materials": 0.20,
         "validate_material_constraints": 0.25,
         "search_scientific_documents": 0.55,
-        "extract_document_insights": 0.70,
+        "document_rag": 0.80,
         "generate_crystal_structure": 0.40,
     }
 
@@ -95,7 +95,7 @@ class PolicyEngine:
             ],
             "document_research": [
                 "search_scientific_documents",
-                "extract_document_insights",
+                "document_rag",
             ],
             "structure_generation": [
                 "generate_crystal_structure",
@@ -125,7 +125,7 @@ class PolicyEngine:
         miss = " ".join(feedback.missing_information).lower()
         if "document" in miss and tool_name in {
             "search_scientific_documents",
-            "extract_document_insights",
+            "document_rag",
         }:
             return 1.0
         if "structure" in miss and tool_name == "generate_crystal_structure":
@@ -145,10 +145,10 @@ class PolicyEngine:
             return 0.7 if state.constraints else 0.2
         if tool_name == "search_scientific_documents":
             return 0.8 if not state.documents else 0.3
-        if tool_name == "extract_document_insights":
+        if tool_name == "document_rag":
             return 0.75 if state.documents else 0.1
         if tool_name == "generate_crystal_structure":
-            return 0.65 if state.materials_found else 0.1
+            return 0.75
         return 0.2
 
     def _state_compatibility(self, state: AgentState, tool_name: str) -> float:
@@ -156,9 +156,9 @@ class PolicyEngine:
             return 1.0
         if tool_name == "validate_material_constraints" and state.constraints:
             return 1.0
-        if tool_name == "extract_document_insights" and state.documents:
+        if tool_name == "document_rag" and state.documents:
             return 1.0
-        if tool_name == "generate_crystal_structure" and state.materials_found:
+        if tool_name == "generate_crystal_structure":
             return 1.0
         if tool_name in {"query_materials_database", "search_scientific_documents"}:
             return 0.8
@@ -166,10 +166,8 @@ class PolicyEngine:
 
     def _build_arguments(self, state: AgentState, tool_name: str) -> Dict[str, Any]:
         if tool_name == "query_materials_database":
-            return {
-                "material_query": self._extract_material_query(state.query),
-                "filters": {},
-            }
+            query_mode = self._extract_material_query(state.query)
+            return {**query_mode, "filters": {}, "limit": 5}
         if tool_name == "compare_materials":
             material_ids = [m.material_id for m in state.materials_found[:5]]
             return {
@@ -181,16 +179,27 @@ class PolicyEngine:
         if tool_name == "search_scientific_documents":
             hint = state.materials_found[0].formula if state.materials_found else None
             return {"query": state.query, "material_focus": hint, "max_results": 5}
-        if tool_name == "extract_document_insights":
-            docs = [doc.title for doc in state.documents[:5]]
-            return {"documents": docs, "focus_area": "materials properties"}
+        if tool_name == "document_rag":
+            docs = [
+                {
+                    "document_id": f"doc-{idx}",
+                    "title": doc.title,
+                    "doi": None,
+                    "url": None,
+                    "source": doc.source,
+                    "relevance_score": float(doc.relevance_score),
+                }
+                for idx, doc in enumerate(state.documents[:5], start=1)
+            ]
+            return {
+                "documents": docs,
+                "query": state.query,
+                "top_k": 5,
+                "max_documents": 5,
+                "max_chunks_per_document": 20,
+            }
         if tool_name == "generate_crystal_structure":
-            material_id = (
-                state.materials_found[0].material_id
-                if state.materials_found
-                else "mp-149"
-            )
-            return {"material_id": material_id, "format": "cif"}
+            return {"query": state.query, "format": "cif"}
         return {}
 
     def _extract_material_query(self, query: str) -> Dict[str, str]:

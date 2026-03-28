@@ -6,13 +6,22 @@ from tools.config import TOOL_REGISTRY
 
 
 class _AlwaysSufficientEvaluator(Evaluator):
-    def evaluate(self, state, tool_name, tool_output):
+    def evaluate(
+        self,
+        state,
+        tool_name,
+        tool_output,
+        next_planned_step,
+        tools_available,
+    ):
         from api.v3.state import EvaluatorFeedback
 
         return EvaluatorFeedback(
-            sufficient=True,
+            verdict="sufficient",
             confidence=0.9,
             missing_information=[],
+            risk_if_stop="low",
+            can_answer=True,
             reasoning="enough",
         )
 
@@ -31,8 +40,13 @@ def test_termination_on_sufficient_evidence():
     )
     out = run_loop(state, PolicyEngine(), _AlwaysSufficientEvaluator(), TOOL_REGISTRY)
 
-    assert out.stop_reason == "sufficient_evidence"
+    last_trace = out.policy_trace[-1] if out.policy_trace else {}
+    assert (
+        out.stop_reason == "sufficient_evidence"
+    ), f"unexpected stop_reason={out.stop_reason}; last_policy_trace={last_trace}"
     assert out.execution_status == "done"
+    assert out.evaluation_trace
+    assert out.evaluation_trace[-1]["eval"]["can_answer"] is True
 
 
 def test_termination_when_budget_exceeded_immediately():

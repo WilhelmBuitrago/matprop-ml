@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any, Dict
 
 from tools.base import ToolContract, ToolResult
@@ -9,6 +10,9 @@ from .validator import evaluate_constraints, validate_constraints
 
 if TYPE_CHECKING:
     from api.v3.state import AgentState
+
+
+logger = logging.getLogger(__name__)
 
 
 class ValidateMaterialConstraintsTool(ToolContract):
@@ -32,8 +36,13 @@ class ValidateMaterialConstraintsTool(ToolContract):
     def execute(self, **kwargs: Any) -> ToolResult:
         state = kwargs.get("agent_state")
         constraints: Dict[str, Any] = kwargs.get("constraints", {})
+        logger.info(
+            "validate_constraints execute constraints_keys=%s",
+            sorted(constraints.keys()),
+        )
 
         if state is None:
+            logger.warning("validate_constraints missing agent_state")
             return ToolResult(
                 status="error",
                 payload={},
@@ -43,6 +52,7 @@ class ValidateMaterialConstraintsTool(ToolContract):
 
         materials = getattr(state, "materials_found", None)
         if not materials:
+            logger.warning("validate_constraints no materials in state")
             return ToolResult(
                 status="error",
                 payload={},
@@ -52,6 +62,10 @@ class ValidateMaterialConstraintsTool(ToolContract):
 
         valid_constraints, validation_errors = validate_constraints(constraints)
         if not valid_constraints:
+            logger.warning(
+                "validate_constraints invalid constraints errors=%s",
+                validation_errors,
+            )
             return ToolResult(
                 status="error",
                 payload={},
@@ -87,4 +101,10 @@ class ValidateMaterialConstraintsTool(ToolContract):
             "materials": material_results,
             "validation_errors": [],
         }
+        logger.info(
+            "validate_constraints success total=%d passing=%d failing=%d",
+            total_materials,
+            passing_count,
+            failing_count,
+        )
         return ToolResult(status="success", payload=payload)

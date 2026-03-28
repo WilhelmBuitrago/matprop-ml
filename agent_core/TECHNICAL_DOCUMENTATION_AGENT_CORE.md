@@ -28,10 +28,10 @@ def classify_intent(query: str) -> Intent:
 
 | Intent | Palabras Clave | Significado | Herramientas Candidatas |
 |---|---|---|---|
-| `MATERIAL_LOOKUP` | (default) | Usuario busca propiedades de materiales | query_materials, search_docs, generate_structure |
+| `MATERIAL_LOOKUP` | (default) | Usuario busca propiedades de materiales | query_materials, search_scientific_documents, generate_structure |
 | `COMPARE` | compare, versus, vs | Comparar propiedades entre materiales | compare_materials, query_materials |
 | `CONSTRAINT_VALIDATION` | constraint, must, at least, less than | Validar restricciones | validate_constraints, query_materials |
-| `DOCUMENT_RESEARCH` | paper, document, literature | Investigación bibliográfica | search_documents, extract_insights |
+| `DOCUMENT_RESEARCH` | paper, document, literature | Investigación bibliográfica | search_scientific_documents, document_rag |
 | `STRUCTURE_GENERATION` | structure, cif, poscar, crystal | Generar estructura cristalina | generate_structure, query_materials |
 
 ### 1.2 Routing de Candidatos por Intent
@@ -54,7 +54,7 @@ CONSTRAINT_VALIDATION
 
 DOCUMENT_RESEARCH
 ├─ search_scientific_documents (primaria)
-└─ extract_document_insights (secundaria)
+└─ document_rag (secundaria)
 
 STRUCTURE_GENERATION
 ├─ generate_crystal_structure (primaria)
@@ -82,7 +82,7 @@ def can_run(tool: Tool, state: AgentState) -> bool:
     elif tool == compare_materials:
         return len(state.materials_found) >= 2  # Requiere ≥2 materiales
     
-    elif tool == extract_insights:
+    elif tool == document_rag:
         return len(state.documents) > 0  # Requiere documentos
     
     # etc...
@@ -136,8 +136,8 @@ info_gain(tool, state) ∈ [0, 1]
 
 Probabilidad de que ejecutar tool → información nueva:
 ├─ query_materials: 0.8 si ≤1 material, 0.3 si ≥2, 0.1 si ≥5
-├─ search_documents: 0.9 si ≤2 docs, 0.5 si ≥3, 0.2 si ≥10
-├─ extract_insights: 0.7 si docs sin insights, 0.3 si alguns, 0.0 si todos extraído
+├─ search_scientific_documents: 0.9 si ≤2 docs, 0.5 si ≥3, 0.2 si ≥10
+├─ document_rag: 0.8 si docs completos aún no procesados, 0.3 si ya hay evidencia RAG, 0.0 si top-k chunks suficiente
 ├─ validate_constraints: 1.0 si constraints pending, 0.0 si ya validado
 └─ compare_materials: 0.6 si ≤2 materiales, 0.2 si ≥3, 0.0 si ≥10
 
@@ -158,7 +158,7 @@ Score binario por mapping intent → tool:
 Tabla:
 Intent MATERIAL_LOOKUP:
   ├─ query_materials: 1.0
-  ├─ search_documents: 0.7
+  ├─ search_scientific_documents: 0.7
   └─ generate_structure: 0.4
 
 Intent COMPARE:
@@ -170,8 +170,8 @@ Intent CONSTRAINT_VALIDATION:
   └─ query_materials: 0.4
 
 Intent DOCUMENT_RESEARCH:
-  ├─ search_documents: 1.0
-  └─ extract_insights: 0.7
+  ├─ search_scientific_documents: 1.0
+  └─ document_rag: 0.8
 
 Intent STRUCTURE_GENERATION:
   ├─ generate_structure: 1.0
@@ -187,9 +187,9 @@ Estimación normalizada de costo computacional:
 ├─ query_materials: 0.35        (API call + ranking, ~500ms)
 ├─ compare_materials: 0.20      (stub, <5ms)
 ├─ validate_constraints: 0.25   (local processing, ~30ms)
-├─ search_documents: 0.55       (3 APIs paralelos, ~1500ms)
-├─ extract_insights: 0.70       (LLM inference, ~1000ms)
-└─ generate_structure: 0.40 (stub, <5ms)
+├─ search_scientific_documents: 0.55       (3 APIs paralelos, ~1500ms)
+├─ document_rag: 0.80           (download + parsing + embeddings + LLM, ~2500-6000ms)
+└─ generate_structure: 0.50      (parse + prompt + LLM + validación, ~1200-6000ms)
 
 La penalidad `- w_cost × cost(tool)` reduce score de herramientas caras
 ```
@@ -215,7 +215,7 @@ Scoring query_materials:
          = 0.45 + 0.24 + 0.20 - 0.0525
          = 0.8375 ✓
 
-Scoring search_documents:
+Scoring search_scientific_documents:
 ├─ miss_coverage = 0.5 (información secundaria, no primaria)
 ├─ info_gain = 0.4    (docs ya presentes)
 ├─ compatibility = 0.7 (secundaria)
@@ -271,17 +271,17 @@ def _build_arguments(tool: Tool, state: AgentState, query: str) -> Dict:
             "properties_to_compare": ["band_gap", "density", "energy_above_hull"]
         }
     
-    elif tool == extract_insights:
-        # Usar títulos de documentos
+    elif tool == document_rag:
+      # Usar documentos ya recuperados por search_scientific_documents
         return {
-            "documents": [
-                {"title": d.title, "abstract": d.abstract}
-                for d in state.documents[:10]
-            ],
-            "focus_area": "material_properties"
+        "documents": [d for d in state.documents[:5]],
+        "query": query,
+        "top_k": 10,
+        "max_documents": 5,
+        "max_chunks_per_document": 20,
         }
     
-    elif tool == search_documents:
+    elif tool == search_scientific_documents:
         # User query + material focus
         material_focus = None
         if state.materials_found:
@@ -294,16 +294,13 @@ def _build_arguments(tool: Tool, state: AgentState, query: str) -> Dict:
         }
     
     elif tool == generate_structure:
-        # Material ID o fallback
-        if state.materials_found:
-            material_id = state.materials_found[0].id
-        else:
-            material_id = "mp-149"  # Silicon
-        
-        return {
-            "material_id": material_id,
-            "format": "cif"
-        }
+      # Herramienta actual opera sobre query textual
+      # con opciones de serialización/depuración
+      return {
+        "query": query,
+        "format": "cif",
+        "include_debug": False,
+      }
     
     return {}
 ```
@@ -652,10 +649,14 @@ def apply_tool_result(self, tool: Tool, result: ToolResult):
             )
         self.budget.context_tokens_used += len(result.payload["materials"]) * 50
 
-    elif tool == "search_documents":
+    elif tool == "search_scientific_documents":
         for doc in result.payload["documents"]:
             self.documents.append(DocumentRecord(...))
         self.budget.context_tokens_used += len(result.payload["documents"]) * 75
+
+    elif tool == "document_rag":
+      self.properties_collected["document_rag_results"] = result.payload["results"]
+      self.budget.context_tokens_used += len(result.payload["results"]) * 110
 
     # ... (idem para otras herramientas)
     
@@ -878,20 +879,41 @@ Contexto generado: ~50 tokens/material
 Wall time SLA: <2 segundos (con network latency)
 ```
 
+#### 5.1.7 Logging Points
+
+| Etapa | Patrón de Log | Nivel |
+|---|---|---|
+| Inicio | `query_materials.execute start keys=...` | INFO |
+| Request | `query_materials request mode=... value=... limit=...` | INFO |
+| Fetch | `query_materials fetched=...` | INFO |
+| Filtros | `query_materials after_filters=...` | INFO |
+| Éxito | `query_materials success count=...` | INFO |
+| Error de validación | `query_materials validation_error=...` | WARNING |
+| Error API | `query_materials api_error=...` | ERROR |
+| Error inesperado | `query_materials unexpected_error` | ERROR |
+
 ---
 
 ### 5.2 search_scientific_documents
 
-**Estado:** ✅ Producción | **Archivo:** `search_documents.py` | **Costo:** 250-400pts | **Tiempo:** 600-4000ms
+**Estado:** ✅ Producción | **Archivo:** `search_scientific_documents/tool.py` | **Costo:** 250-400pts | **Tiempo:** 600-4000ms
 
 #### 5.2.1 Contrato de Entrada
 
 ```json
 {
+  "type": "object",
   "properties": {
     "query": {"type": "string", "minLength": 3},
-    "material_focus": {"type": "string"},
-    "max_results": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10}
+    "material_focus": {"type": ["string", "null"]},
+    "max_results": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
+    "providers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["arxiv", "semantic_scholar", "crossref"]
+      }
+    }
   },
   "required": ["query"],
   "additionalProperties": false
@@ -903,16 +925,17 @@ Wall time SLA: <2 segundos (con network latency)
 ```json
 {
   "documents": [{
-    "doi": "string",
+    "document_id": "string",
     "title": "string",
+    "authors": ["string"],
+    "year": "integer|null",
+    "source": "semantic_scholar|crossref|arxiv",
+    "doi": "string|null",
+    "url": "string|null",
     "abstract": "string",
-    "authors": ["array"],
-    "publication_date": "YYYY-MM-DD",
-    "citations": "int",
-    "provider": "semantic_scholar|crossref|arxiv",
-    "url": "string"
+    "relevance_score": "number[0,1]"
   }],
-  "count": "int"
+  "count": "integer"
 }
 ```
 
@@ -921,10 +944,10 @@ Wall time SLA: <2 segundos (con network latency)
 ```
 1. Validación query (minLength ≥ 3)
 2. Tokenización y limpieza (minúsculas, stopwords)
-3. Búsqueda paralela en 3 proveedores:
-   ├─ SemanticScholar: mpr.paper.SearchResults(query, fields=[...])
-   ├─ Crossref: GET /v1/works?query={query}
-   └─ arXiv: GET /api/query?search_query=all:{query}
+3. Búsqueda paralela en proveedores seleccionados:
+  ├─ Default: arXiv + SemanticScholar
+  ├─ Crossref opcional vía `providers`
+  └─ Cada provider falla de forma aislada sin abortar el pipeline completo
 4. Normalización documentos crudo
 5. Deduplicación multi-nivel:
    ├─ Nivel 1: Agrupar por DOI exacto
@@ -1021,7 +1044,7 @@ except Exception:
 **Si un proveedor falla:**
 ```
 ├─ Continuar con otros 2 proveedores
-└─ Si todos fallan → stop_reason="PROVIDER_FAILURE"
+└─ Si todos fallan → error_code="PROVIDER_FAILURE"
 ```
 
 **Si JSON parsing falla:**
@@ -1049,6 +1072,22 @@ Contexto generado: ~75 tokens/documento
 Wall time SLA: <5 segundos
 ```
 
+#### 5.2.8 Logging Points
+
+La herramienta emite telemetría estructurada para observabilidad de cada fase:
+
+| Etapa | Patrón de Log | Nivel |
+|---|---|---|
+| Validación | `search_documents validation_error empty_query` | WARNING |
+| Validación | `search_documents validation_error no_valid_providers` | WARNING |
+| Inicio | `search_documents execute query_len=... providers=...` | INFO |
+| Fetch | `search_documents fetched_raw=...` | INFO |
+| Normalización | `search_documents normalized=...` | INFO |
+| Deduplicación | `search_documents deduplicated=...` | INFO |
+| Ranking | `search_documents ranked=...` | INFO |
+| Error de proveedores | `search_documents provider_failure=...` | ERROR |
+| Error inesperado | `search_documents unexpected_error` | ERROR |
+
 ---
 
 ### 5.3 validate_material_constraints
@@ -1059,28 +1098,46 @@ Wall time SLA: <5 segundos
 
 ```json
 {
-  "constraints": [{
-    "property": {"type": "string"},
-    "operator": {"enum": [">=", "<=", "==", ">", "<", "!="]},
-    "value": {"type": ["number", "string", "boolean"]}
-  }],
-  "agent_state": {"type": "object"}
+  "type": "object",
+  "properties": {
+    "constraints": {
+      "type": "object",
+      "properties": {
+        "band_gap": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}},
+        "density": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}},
+        "energy_above_hull": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}},
+        "formation_energy": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}},
+        "volume": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}},
+        "is_stable": {"type": "boolean"},
+        "is_metal": {"type": "boolean"}
+      },
+      "additionalProperties": false,
+      "minProperties": 1
+    }
+  },
+  "required": ["constraints"],
+  "additionalProperties": false
 }
 ```
+
+Nota: `agent_state` no está en el JSON schema de entrada, pero es obligatorio en runtime para `execute()`.
 
 #### 5.3.2 Contrato de Salida
 
 ```json
 {
   "valid": {"type": "boolean"},
-  "materials_satisfying_constraints": {"type": "array", "items": {"type": "string"}},
-  "materials_failing_constraints": {"type": "array", "items": {"type": "string"}},
   "summary": {
-    "total_materials_checked": {"type": "integer"},
-    "total_satisfying": {"type": "integer"},
-    "total_failing": {"type": "integer"},
-    "constraints_checked": {"type": "integer"}
-  }
+    "total_materials": {"type": "integer"},
+    "passing_count": {"type": "integer"},
+    "failing_count": {"type": "integer"}
+  },
+  "materials": [{
+    "material_id": "string",
+    "passes": "boolean",
+    "failed_constraints": ["string"]
+  }],
+  "validation_errors": ["string"]
 }
 ```
 
@@ -1153,26 +1210,42 @@ Contexto: ~5 tokens/resultado
 100% predecible, determinístico
 ```
 
+#### 5.3.7 Logging Points
+
+| Etapa | Patrón de Log | Nivel |
+|---|---|---|
+| Inicio | `validate_constraints execute constraints_keys=...` | INFO |
+| Error runtime | `validate_constraints missing agent_state` | WARNING |
+| Error runtime | `validate_constraints no materials in state` | WARNING |
+| Error de validación | `validate_constraints invalid constraints errors=...` | WARNING |
+| Éxito | `validate_constraints success total=... passing=... failing=...` | INFO |
+
 ---
 
-### 5.4 extract_document_insights
+### 5.4 document_rag (DocumentRAGTool)
 
-**Estado:** ✅ Producción | **Precondiciones:** state.documents | **Costo:** 500pts | **Tiempo:** 500-3000ms
+**Símbolo interno:** `#sym:DocumentRAGTool`
+
+**Estado:** ✅ Producción | **Precondiciones:** state.documents | **Costo:** 650-900pts | **Tiempo:** 1500-8000ms
 
 #### 5.4.1 Contrato de Entrada
 
 ```json
 {
-  "documents": [{
-    "title": {"type": "string"},
-    "abstract": {"type": "string"},
-    "doi": {"type": "string"}
-  }],
-  "focus_area": {
-    "type": "string",
-    "enum": ["material_properties", "synthesis", "characterization", "applications"],
-    "default": "material_properties"
-  }
+  "documents": [
+    {
+      "document_id": {"type": "string"},
+      "title": {"type": "string"},
+      "doi": {"type": ["string", "null"]},
+      "url": {"type": ["string", "null"]},
+      "source": {"type": "string"},
+      "relevance_score": {"type": "number", "minimum": 0, "maximum": 1}
+    }
+  ],
+  "query": {"type": "string"},
+  "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
+  "max_documents": {"type": "integer", "minimum": 1, "maximum": 10},
+  "max_chunks_per_document": {"type": "integer", "minimum": 5, "maximum": 50}
 }
 ```
 
@@ -1180,100 +1253,146 @@ Contexto: ~5 tokens/resultado
 
 ```json
 {
-  "insights": [{
-    "document_title": {"type": "string"},
-    "extracted_insights": [{
-      "insight": {"type": "string"},
-      "relevance": {"type": "number", "minimum": 0, "maximum": 1}
-    }],
-    "fallback_used": {"type": "boolean"}
-  }],
-  "count": {"type": "integer"}
+  "results": [
+    {
+      "document_id": "string",
+      "doi": "string|null",
+      "url": "string|null",
+      "title": "string",
+      "page": "integer",
+      "section": "string",
+      "paragraph": "string",
+      "chunk": "string",
+      "score": "number[0,1]",
+      "extracted_info": ["string"]
+    }
+  ]
 }
 ```
 
 #### 5.4.3 Flujo de Ejecución
 
 ```
-1. Preparación de prompt (template + focus area)
-2. Por cada documento:
-   ├─ Construir mensaje: título + abstract
-   └─ Agregar al historial
-3. Llamada a LLM remoto:
-   ├─ POST {AGENTS_URL}/v1/completions
-   ├─ temperature=0.1 (determinismo bajo)
-   ├─ max_tokens=300 (output bounded)
-   └─ timeout=10s
-4. Parsing JSON robusto:
-   ├─ Intento 1: json.loads(response)
-   ├─ Intento 2: Extraer substring entre { y }
-   ├─ Si éxito: validar schema
-   └─ Si falla: usar fallback
-5. Por cada documento procesado:
-   ├─ Si LLM exitoso: agregar insights reales
-   └─ Si LLM falló: usar fallback genérico + marcar fallback_used=true
-6. Compilar resultado & retornar
+1. Validación estricta de input (documents + query)
+2. Selección de documentos (top-N por relevance_score)
+3. Descarga de documento completo por prioridad:
+  ├─ DOI -> Unpaywall -> PDF OA
+  ├─ arXiv PDF fallback (si aplica)
+  └─ URL directa como último recurso
+4. Parsing de contenido completo:
+  ├─ PDF: PyMuPDF (page-aware)
+  └─ HTML: limpieza y extracción de párrafos
+5. Normalización textual y detección de secciones
+6. Semantic-aware chunking:
+  ├─ Agrupa párrafos por coherencia temática
+  ├─ Tamaño objetivo: 150-400 palabras
+  └─ Overlap ligero de continuidad
+7. Hybrid retrieval global:
+  ├─ Embedding score (mxbai-embed-large via AGENTS_SERVICE_URL)
+  ├─ Keyword overlap score (Jaccard)
+  └─ chunk_score = 0.7*embedding + 0.3*keyword
+8. Deduplicación de chunks:
+  ├─ Exacta por hash(normalized_text)
+  └─ Near-duplicate por similitud > 0.95
+9. Re-ranking final:
+  └─ final_score = 0.6*chunk_score + 0.4*document_relevance
+10. Selección top-k global (no por documento)
+11. Extracción técnica con Qwen por chunk:
+  ├─ prompt con query + metadata + chunk
+  └─ output: extracted_info[]
+12. Formateo de salida estructurada y validación schema
 
-Tiempo: 500-3000ms (dominado por LLM inference)
+Tiempo: 1500-8000ms (dominado por descarga/parsing/embeddings/LLM)
 ```
 
 #### 5.4.4 Fallback Graceful
 
-**Si LLM falla o JSON parsing falla:**
+**Estrategias de degradación controlada:**
 
 ```python
-FALLBACK_INSIGHTS = [
-    {"insight": "Material properties mentioned", "relevance": 0.78},
-    {"insight": "Synthesis methodology described", "relevance": 0.72},
-    {"insight": "Characterization data included", "relevance": 0.68},
-    {"insight": "Performance metrics discussed", "relevance": 0.65}
-]
+# 1) Fallo de un documento (download/parse/chunk)
+skip_document_and_continue()
 
-# Resultado mantenido siempre válido, nunca rompe flujo
+# 2) Fallo de embeddings
+use_keyword_only_retrieval()
+
+# 3) Fallo de extracción LLM
+result["extracted_info"] = []
+
+# 4) Todos los documentos fallan
+return ToolResult(status="error", error_code="NO_DOCUMENTS_PROCESSED")
 ```
 
-#### 5.4.5 Prompt Template
+#### 5.4.5 Prompt Template (Extracción por Chunk)
 
 ```
 SYSTEM:
-"Eres un experto en extracción de información científica.
- Tu tarea es extraer insights clave de documentos científicos
- sobre {focus_area}.
+"Eres un extractor técnico de evidencia científica.
+ Debes devolver únicamente hechos del chunk dado y relevantes a la query.
+ Responde como JSON array de strings, sin texto adicional."
  
- Retorna un JSON con estructura:
- {'insights': [{'insight': 'texto breve', 'relevance': float}]}"
-
 USER:
-"Documento: {title}
- Resumen: {abstract}
+"Query: {query}
+ Documento: {title}
+ Sección: {section}
+ Página: {page}
+ Chunk: {chunk_text}
  
- Extrae insights sobre {focus_area}."
+ Extrae hasta 4 hechos técnicos concisos y verificables."
 ```
 
 #### 5.4.6 Características Especiales
 
 - **Temperature baja (0.1):** Para determinismo (vs 0.7 típico)
-- **JSON parsing resiliente:** 2 intentos antes de fallback
-- **Fallback sintético:** Garantiza salida siempre válida
-- **Sin requemutación estado:** Herramienta es pura
+- **Chunking semántico real:** No depende de split fijo por longitud
+- **Trazabilidad completa:** Cada resultado preserva `document_id`, `page`, `section` y texto fuente
+- **Ranking híbrido + re-ranking:** Relevancia local del chunk y global del documento
+- **Sin LLM antes de retrieval:** El modelo solo opera sobre top-k chunks ya filtrados
 
 #### 5.4.7 Costo Computacional
 
 ```
-Tiempo: 500-3000ms (promedio ~1200ms)
-Puntos: 500 (alto, LLM-based)
-Contexto: ~30 tokens/insight
+Complejidad aproximada: O(D * (download + parse + chunk) + C * emb + C log C)
+Tiempo: 1500-8000ms (promedio ~3200ms)
+Puntos: 650-900 (alto, pipeline RAG completo)
+Contexto: ~110 tokens/resultado (chunk + metadata + extracted_info)
 
-SLA: <5 segundos
+SLA: <10 segundos
 ```
+
+#### 5.4.8 Logging Points
+
+| Etapa | Patrón de Log | Nivel |
+|---|---|---|
+| Inicio | `document_rag execute start documents=... query_len=...` | INFO |
+| Validación | `document_rag validation_error empty_query|empty_documents` | WARNING |
+| Selección | `document_rag selected_documents=... top_k=...` | INFO |
+| Descarga | `document_rag downloaded doc=... content_type=... bytes=...` | INFO |
+| Parsing | `document_rag parsed doc=... paragraphs=...` | INFO |
+| Chunking | `document_rag chunked doc=... chunks=... total_chunks=...` | INFO |
+| Falla por documento | `Skipping document ... due to pipeline failure` | WARNING |
+| Fallback embeddings | `document_rag embedding_failed fallback=keyword_only` | WARNING |
+| Retrieval | `document_rag retrieval scored=... deduped=... selected=...` | INFO |
+| Falla extracción | `document_rag extraction_failed chunk=...` | WARNING |
+| Falla global | `document_rag no_documents_processed` | ERROR |
+| Éxito | `document_rag success results=...` | INFO |
 
 ---
 
 ### 5.5 compare_materials (STUB - NO PRODUCCIÓN)
 
-**Estado:** 🟡 STUB | **Completitud:** 5% | **Acción:** Implementar
+**Estado:** 🟡 STUB | **Completitud:** 10-15% | **Acción:** Implementar comparación real
 
-#### 5.5.1 Especificación Deseada
+#### 5.5.1 Estado Actual (Implementado)
+
+- Tiene schema de entrada/salida válido
+- Verifica precondición mínima: `state.materials_found >= 2`
+- Emite logs operativos (precondition/execute/success)
+- Retorna payload de ejemplo con valores sintéticos
+
+La lógica de ranking aún no consulta propiedades reales del estado, por lo que sigue siendo STUB funcional.
+
+#### 5.5.2 Contratos Actuales
 
 ```json
 {
@@ -1282,97 +1401,170 @@ SLA: <5 segundos
     "properties_to_compare": ["band_gap", "density"]
   },
   "output": {
-    "comparison": [{
-      "property": "band_gap",
-      "materials": [
-        {"material_id": "mp-149", "value": 1.166, "rank": 1},
-        {"material_id": "mp-286", "value": 0.0, "rank": 2}
-      ],
-      "best_for": "mp-149"
-    }],
-    "overall_best": "mp-149"
+    "comparison": [
+      {
+        "material_id": "mp-149",
+        "properties": {"band_gap": 1.1, "density": 3.0},
+        "rank": 1
+      }
+    ],
+    "best_for": {"band_gap": "mp-149", "density": "mp-286"}
   }
 }
 ```
 
-#### 5.5.2 Cambios Requeridos
+#### 5.5.3 Logging Points
 
-1. Lookup real de materiales en `state.materials_found`
-2. Validación que material_ids existen
-3. Extracción de propiedades solicitadas
-4. Scoring y ranking por propiedad
-5. Identificación de "best_for" por propiedad y overall
-6. Serialización a JSON
+| Etapa | Patrón de Log | Nivel |
+|---|---|---|
+| Precondición fallida | `compare_materials precondition failed materials_found=...` | INFO |
+| Precondición satisfecha | `compare_materials precondition passed materials_found=...` | INFO |
+| Inicio ejecución | `compare_materials execute material_ids=... properties=...` | INFO |
+| Éxito | `compare_materials success compared=...` | INFO |
+
+#### 5.5.4 Cambios Pendientes para Producción
+
+1. Lookup real de `material_ids` en `state.materials_found`
+2. Validación de material_ids inexistentes
+3. Cálculo de comparación por propiedad (sin valores hardcoded)
+4. Ranking determinístico reproducible por propiedad y overall
 
 ---
 
-### 5.6 generate_crystal_structure (STUB - NO PRODUCCIÓN)
+### 5.6 generate_crystal_structure (PARCIAL - EN TRANSICIÓN)
 
-**Estado:** 🟡 STUB | **Completitud:** 5% | **Acción:** Implementar
+**Estado:** ⚠️ PARCIAL | **Completitud:** 60-70% | **Acción:** Harden para operación totalmente estable
 
-#### 5.6.1 Especificación Deseada
+#### 5.6.1 Estado Actual (Implementado)
+
+Pipeline real disponible:
+
+1. Parsing determinístico de constraints (`DeterministicCrystalParser`)
+2. Fallback de extracción de spec vía `AgentsCrystalClient.extract_spec()`
+3. Construcción de prompt (`CrystalPromptBuilder`)
+4. Generación vía `AgentsCrystalClient.generate()`
+5. Parseo estructural (`PostProcessor`)
+6. Validación física (`PyMatgenValidator`)
+7. Serialización CIF/POSCAR/JSON
+
+Dependencia principal: servicio remoto de generación (AGENTS).
+
+#### 5.6.2 Contrato de Entrada Actual
 
 ```json
 {
-  "input": {
-    "material_id": "mp-149",
-    "format": "cif"  // cif | poscar | json
-  },
-  "output": {
-    "structure_data": "structure in requested format",
-    "lattice_parameters": {
-      "a": 5.431,
-      "b": 5.431,
-      "c": 5.431,
-      "alpha": 90,
-      "beta": 90,
-      "gamma": 90
+  "type": "object",
+  "properties": {
+    "query": {"type": "string", "minLength": 4},
+    "format": {"type": "string", "enum": ["cif", "poscar", "json"]},
+    "generation_mode": {
+      "type": "string",
+      "enum": ["conditional", "infill", "formula_compute", "element_generation", "unconditional"]
     },
-    "space_group": "Fd-3m",
-    "point_group": "m-3m"
+    "include_debug": {"type": "boolean"}
+  },
+  "required": ["query"],
+  "additionalProperties": false
+}
+```
+
+#### 5.6.3 Contrato de Salida Actual
+
+```json
+{
+  "cif": "string",
+  "structure": {
+    "lattice": {
+      "a": "number",
+      "b": "number",
+      "c": "number",
+      "alpha": "number",
+      "beta": "number",
+      "gamma": "number"
+    },
+    "atoms": [
+      {"element": "string", "x": "number", "y": "number", "z": "number"}
+    ]
+  },
+  "metadata": {
+    "formula": "string|null",
+    "space_group": "string|null",
+    "generation_mode": "string",
+    "output_format": "string"
+  },
+  "validation": {
+    "is_valid": "boolean",
+    "errors": ["string"],
+    "warnings": ["string"]
+  },
+  "debug": {
+    "prompt": "string",
+    "raw_output": "string"
   }
 }
 ```
 
-#### 5.6.2 Implementación Requerida
+#### 5.6.4 Configuración de Generación (Actual)
 
-```python
-from mp_api.client import MPRester
-from pymatgen.io.cif import CifWriter
-from pymatgen.io.poscar import Poscar
+Parámetros actualmente definidos en la llamada de generación:
 
-def execute(material_id, format):
-    # 1. Retrieval structure
-    with MPRester(MP_API_KEY) as mpr:
-        structure = mpr.get_structure_by_material_id(material_id)
-    
-    # 2. Serialization
-    if format == "cif":
-        writer = CifWriter(structure)
-        return writer.get_string()
-    elif format == "poscar":
-        poscar = Poscar(structure)
-        return str(poscar)
-    elif format == "json":
-        return structure.to_json()
-    
-    # 3. Extract lattice parameters
-    lattice_params = {
-        "a": structure.lattice.a,
-        "b": structure.lattice.b,
-        "c": structure.lattice.c,
-        "alpha": structure.lattice.alpha,
-        "beta": structure.lattice.beta,
-        "gamma": structure.lattice.gamma
-    }
-    
-    return {
-        "structure_data": serialized_structure,
-        "lattice_parameters": lattice_params,
-        "space_group": structure.get_space_group_info()[0],
-        "point_group": structure.get_point_group_symbol()
-    }
+- `temperature=0.3`
+- `max_tokens=900`
+- `stop_tokens=["\n\n", "# end"]`
+- `model_name="WilhelmBuitrago/llamat-3-cif-8b:Q5_K_M"`
+
+Además, utiliza el prompt base configurado en `CRYSTAL_PROMPT_CONFIG_V1`.
+
+#### 5.6.5 Template de Prompt (Resumen)
+
+```text
+SYSTEM:
+Instrucciones de generación cristalina y formato de salida estructurado.
+
+USER:
+- Especificación determinística parseada (formula/lattice/space_group/elements)
+- Restricciones y modo de generación
+- Reglas para retornar únicamente estructura parseable
 ```
+
+La salida cruda pasa por post-procesamiento determinístico antes de validación física.
+
+#### 5.6.6 Logging Points
+
+| Etapa | Patrón de Log | Nivel |
+|---|---|---|
+| Inicio | `generate_structure execute start query_len=...` | INFO |
+| Opciones | `generate_structure options format=... include_debug=... preferred_mode=...` | INFO |
+| Parser | `generate_structure deterministic_spec formula=... lattice=...` | INFO |
+| Fallback spec | `generate_structure missing critical fields, calling extract_spec` | INFO |
+| Merge spec | `generate_structure merged_spec keys=...` | INFO |
+| Spec final | `generate_structure crystal_spec mode=... formula=...` | INFO |
+| Prompt | `generate_structure prompt built user_prompt_len=...` | INFO |
+| Respuesta modelo | `generate_structure generation received raw_len=...` | INFO |
+| Parse estructura | `generate_structure parsed atoms=...` | INFO |
+| Falla validación | `generate_structure validation_failed errors=... warnings=...` | WARNING |
+| Éxito | `generate_structure success output_format=... warnings=...` | INFO |
+| Error parseo | `generate_structure parsing_error=...` | WARNING |
+| Error inesperado | `generate_structure unexpected_error` | ERROR |
+
+#### 5.6.7 Riesgos Técnicos Actuales
+
+1. Dependencia fuerte del servicio remoto de generación
+2. Variabilidad del modelo generativo en outputs limítrofes
+3. Posibles errores de parseo/validación pese a prompt estructurado
+
+---
+
+### 5.7 Error Codes por Herramienta
+
+| Herramienta | Error Codes principales | Semántica |
+|---|---|---|
+| query_materials_database | `VALIDATION_ERROR`, `API_ERROR`, `UNEXPECTED_ERROR` | Input inválido, fallo API MP, excepción no controlada |
+| search_scientific_documents | `VALIDATION_ERROR`, `PROVIDER_FAILURE`, `UNEXPECTED_ERROR` | Query/providers inválidos, todos los providers fallaron, error no esperado |
+| validate_material_constraints | `AGENT_STATE_REQUIRED`, `NO_MATERIALS_IN_STATE`, `VALIDATION_ERROR` | Falta agent_state, estado sin materiales, constraints inválidas |
+| document_rag | `VALIDATION_ERROR`, `NO_DOCUMENTS_PROCESSED` | Input inválido, no se pudo procesar ningún documento |
+| compare_materials | N/A (sin path de error explícito en execute) | Hoy retorna payload sintético de éxito |
+| generate_crystal_structure | `VALIDATION_ERROR`, `PARSING_ERROR`, `GENERATION_ERROR` | Query vacía / estructura inválida, parseo fallido, fallo de generación/servicio |
 
 ---
 
@@ -1412,20 +1604,20 @@ def can_run(self, tool: Tool, state: AgentState) -> bool:
     
     # Por herramienta:
     preconditions = {
-        "query_materials": lambda s: True,  # Siempre
+    "query_materials_database": lambda s: True,  # Siempre
         
-        "validate_constraints": lambda s: (
+    "validate_material_constraints": lambda s: (
             len(s.materials_found) > 0 and
             len(s.constraints) > 0
         ),
         
         "compare_materials": lambda s: len(s.materials_found) >= 2,
         
-        "extract_insights": lambda s: len(s.documents) > 0,
+        "document_rag": lambda s: len(s.documents) > 0,
         
-        "search_documents": lambda s: True,  # Siempre
+        "search_scientific_documents": lambda s: True,  # Siempre
         
-        "generate_structure": lambda s: len(s.materials_found) > 0
+    "generate_crystal_structure": lambda s: True
     }
     
     return preconditions.get(tool.name, lambda s: False)(state)
@@ -1559,12 +1751,12 @@ Cada request genera un archivo JSON en `AGENT_TRACE_DIR`:
 | Variable | Por Herramienta/Componente | Requerido | Default | Descripción |
 |---|---|---|---|---|
 | `MP_API_KEY` | query_materials | ✅ Sí | - | API key para Materials Project API |
-| `SEMANTIC_SCHOLAR_API_KEY` | search_documents | ❌ Opcional | - | API key eleva rate limits Semantic Scholar |
-| `CROSSREF_EMAIL` | search_documents | ✅ Sí | - | Email para Crossref API (User-Agent) |
-| `AGENTS_URL` | extract_insights + evaluator | ✅ Sí | http://agents:8003 | URL del servicio de LLM (Ollama/agents) |
-| `AGENT_INSIGHTS_MODEL` | extract_insights | ✅ Sí | Qwen2.5-7B-Instruct-1M | Modelo para extracción de insights |
+| `SEMANTIC_SCHOLAR_API_KEY` | search_scientific_documents | ❌ Opcional | - | API key eleva rate limits Semantic Scholar |
+| `CROSSREF_EMAIL` | search_scientific_documents | ✅ Sí | - | Email para Crossref API (User-Agent) |
+| `AGENTS_URL` | document_rag + evaluator | ✅ Sí | http://agents:8003 | URL del servicio de LLM (Ollama/agents) |
+| `AGENT_INSIGHTS_MODEL` | document_rag | ✅ Sí | Qwen2.5-7B-Instruct-1M | Modelo para extracción técnica sobre chunks RAG |
 | `AGENT_EVALUATOR_MODEL` | evaluator | ✅ Sí | Qwen2.5-7B-Instruct-1M | Modelo para evaluación de evidencia |
-| `AGENTS_SERVICE_URL` | search_documents (fallback) | ❌ Opcional | http://agents:8000 | URL alternativa para búsqueda (embeddings) |
+| `AGENTS_SERVICE_URL` | search_scientific_documents + document_rag | ❌ Opcional | http://agents:8000 | URL del servicio de embeddings |
 | `CORS_ALLOW_ORIGINS` | app.py | ✅ Sí | http://localhost:3000 | Orígenes permitidos para CORS |
 | `AGENT_TRACE_DIR` | persistencia | ✅ Sí | agent_core/data/traces | Directorio para persistencia de trazas |
 
@@ -1572,14 +1764,14 @@ Cada request genera un archivo JSON en `AGENT_TRACE_DIR`:
 
 ## 10. Tabla Comparativa de Herramientas
 
-| Herramienta | Estado | Input | Precond. | Tiempo (ms) | Costo (pts) | APIs | Determinístico |
-|---|---|---|---|---|---|---|---|
-| query_materials | ✅ Prod | material_id\|formula | Ninguno | 150-3000 | 100-150 | MP | 100% |
-| search_documents | ✅ Prod | query | Ninguno | 600-4000 | 250-400 | SS,CF,arXiv | 99% |
-| validate_constraints | ✅ Prod | constraints | materials_found | 20-50 | 50 | Ninguno | 100% |
-| extract_insights | ✅ Prod | documents[] | documents | 500-3000 | 500 | LLM | 90% |
-| compare_materials | 🟡 STUB | material_ids[] | >=2 mats | <5 | 200 | Ninguno | - |
-| generate_structure | 🟡 STUB | material_id | >=1 mat | < 1 | 400 | MP | - |
+| Herramienta | Estado | Input | Precond. | Tiempo (ms) | Costo (pts) | APIs | Logging | Fallback |
+|---|---|---|---|---|---|---|---|---|
+| query_materials_database | ✅ Prod | material_id\|formula\|chemical_system | Ninguno | 150-3000 | 100-150 | MP | ✅ (8 puntos) | ❌ |
+| search_scientific_documents | ✅ Prod | query (+providers opcional) | Ninguno | 600-4000 | 250-400 | arXiv, SemanticScholar, Crossref, embeddings | ✅ (9 puntos) | ✅ TF-IDF-only |
+| validate_material_constraints | ✅ Prod | constraints (+agent_state runtime) | materials_found + constraints | 20-50 | 50 | Ninguno | ✅ (5 puntos) | ❌ |
+| document_rag (#sym:DocumentRAGTool) | ✅ Prod | documents[] + query | documents | 1500-8000 | 650-900 | downloader, parser, embeddings, LLM | ✅ (12 puntos) | ✅ keyword-only / skip-doc |
+| compare_materials | 🟡 STUB | material_ids[] + properties_to_compare[] | >=2 materials | <5 | 200 | Ninguno | ✅ (4 puntos) | ❌ |
+| generate_crystal_structure | ⚠️ PARCIAL | query + format + generation_mode | Ninguno | 1200-6000 | 300-500 | AGENTS (generación), pymatgen | ✅ (13 puntos) | ⚠️ error explícito |
 
 ---
 

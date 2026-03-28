@@ -1,9 +1,7 @@
 import json
-import logging
-import os
 from typing import Any, Dict
 
-from ...services.ollama_client import OllamaClient
+from services.ollama_client import OllamaClient
 
 from .scheme import (
     DecisionModelInput,
@@ -11,8 +9,6 @@ from .scheme import (
     EvaluatorModelInput,
     EvaluatorModelOutput,
 )
-
-logger = logging.getLogger(__name__)
 
 
 def _extract_json_dict(raw: str) -> Dict[str, Any]:
@@ -165,14 +161,3 @@ Output JSON schema:
   "missing_properties": []
 }}
 """.strip()
-
-
-def build_models() -> tuple[DecisionModel, EvaluatorModel]:
-    model_name = os.getenv("AGENTS_DECISION_MODEL", "yasserrmd/Qwen2.5-7B-Instruct-1M")
-    keep_alive = os.getenv("AGENTS_OLLAMA_KEEP_ALIVE", "0s")
-    ollama_client = OllamaClient(keep_alive=keep_alive)
-    logger.info("[agents-v2] using model=%s", model_name)
-    return (
-        DecisionModel(model_name=model_name, ollama_client=ollama_client),
-        EvaluatorModel(model_name=model_name, ollama_client=ollama_client),
-    )

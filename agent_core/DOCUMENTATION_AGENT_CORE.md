@@ -158,16 +158,21 @@ SÍ:
 | Herramienta | ¿Qué Hace? | Entrada | Salida |
 |---|---|---|---|
 | **query_materials** | Busca en Materials Project | material_id ó formula ó chemsys | Lista de materiales |
-| **search_documents** | Busca papers científicos | query | Lista de documentos |
+| **search_scientific_documents** | Descubre y rankea papers científicos multi-fuente | query (+ providers) | Lista de documentos normalizados |
 | **validate_constraints** | Valida restricciones | constraints | Materiales que cumplen |
-| **extract_insights** | Extrae insights (LLM) | documents[] | Insights estructurados |
+| **document_rag (#sym:DocumentRAGTool)** | Descarga documentos completos, chunking semántico y extracción RAG híbrida | documents[] + query | Evidencia estructurada a nivel chunk/párrafo |
+
+### Estado: Parcial / En transición ⚠️
+
+| Herramienta | Descripción | Estado actual |
+|---|---|---|
+| **generate_structure** | Generar estructura CIF/POSCAR/JSON | Pipeline real (parser + prompt builder + validación física), dependiente de servicio LLM remoto |
 
 ### Estado: STUB (No Producción) 🟡
 
 | Herramienta | Descripción | Acción |
 |---|---|---|
-| **compare_materials** | Comparar materiales | Necesita implementación |
-| **generate_structure** | Generar estructura CIF/POSCAR | Necesita integración |
+| **compare_materials** | Comparar materiales | Tiene precondiciones/schema/logging, pero usa valores sintéticos (falta comparación real) |
 
 ---
 
@@ -284,12 +289,12 @@ AGENT_TRACE_DIR=agent_core/data/traces
 
 | Herramienta | Status | Tiempo | Costo | Determinístico |
 |---|---|---|---|---|
-| query_materials | ✅ Prod | 150-3000ms | Bajo | 100% |
-| search_documents | ✅ Prod | 600-4000ms | Medio | 99% |
-| validate_constraints | ✅ Prod | 20-50ms | Muy bajo | 100% |
-| extract_insights | ✅ Prod | 500-3000ms | Alto | 90% |
-| compare_materials | 🟡 STUB | - | - | - |
-| generate_structure | 🟡 STUB | - | - | - |
+| query_materials_database | ✅ Prod | 150-3000ms | Bajo | 100% |
+| search_scientific_documents | ✅ Prod | 600-4000ms | Medio | 99% |
+| validate_material_constraints | ✅ Prod | 20-50ms | Muy bajo | 100% |
+| document_rag | ✅ Prod | 1500-8000ms | Alto | 85% |
+| compare_materials | 🟡 STUB | <5ms | Muy bajo | 100% (mock) |
+| generate_crystal_structure | ⚠️ PARCIAL | 1200-6000ms | Medio-alto | 80-90% |
 
 ---
 
@@ -354,8 +359,20 @@ Schema inválido      → VALIDATION_ERROR → Stop
 Sin evaluador        → fallback conservador
 Sin embeddings       → TF-IDF graceful degradation
 Tool timeout         → error explícito
-LLM falla           → insights sintéticos validados
+LLM falla           → extracción parcial (resultados sin extracted_info)
 ```
+
+### 13.a Logging Operativo por Tool
+
+Todas las herramientas implementadas emiten logs estructurados en cuatro fases:
+
+1. Inicio de ejecución (inputs principales)
+2. Procesamiento intermedio (conteos/etapas)
+3. Resultado final (success con métricas)
+4. Error/fallback (warning/error con motivo)
+
+Este patrón permite auditoría de flujo real y troubleshooting sin inspeccionar trazas crudas.
+Para detalle por herramienta, revisar la sección 5.x en `TECHNICAL_DOCUMENTATION_AGENT_CORE.md`.
 
 ---
 
@@ -435,6 +452,6 @@ Consulta **[TECHNICAL_DOCUMENTATION_AGENT_CORE.md](TECHNICAL_DOCUMENTATION_AGENT
 
 ---
 
-**Última actualización:** Marzo 24, 2026  
-**Versión:** v3.0  
+**Última actualización:** Marzo 27, 2026  
+**Versión:** v3.1  
 **Rama:** Documentación consolidada

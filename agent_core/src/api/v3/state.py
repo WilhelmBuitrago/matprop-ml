@@ -43,9 +43,11 @@ class ToolExecutionRecord:
 class EvaluatorFeedback:
     """Bounded evaluator output used as policy signal only."""
 
-    sufficient: bool
+    verdict: Literal["sufficient", "insufficient"]
     confidence: float
     missing_information: List[str]
+    risk_if_stop: Literal["low", "medium", "high"]
+    can_answer: bool
     reasoning: str
 
 
@@ -80,6 +82,9 @@ class AgentState:
 
     tool_calls: List[ToolExecutionRecord] = field(default_factory=list)
     evaluator_feedback: List[EvaluatorFeedback] = field(default_factory=list)
+    confidence_trajectory: List[float] = field(default_factory=list)
+    risk_trajectory: List[str] = field(default_factory=list)
+    evaluation_trace: List[Dict[str, Any]] = field(default_factory=list)
     policy_trace: List[Dict[str, Any]] = field(default_factory=list)
 
     execution_status: ExecutionStatus = "running"

@@ -8,12 +8,13 @@ Servicio FastAPI que actua como gateway local sobre Ollama para inferencia y uti
 
 Version actual:
 - Arquitectura `v2` only (se elimino `v1`).
-- Capa de servicios estandarizada para chat, CIF, embeddings y gestion de modelos.
+- Capa de servicios estandarizada y centralizada en `V2RuntimeServices`.
 - API HTTP expuesta en puerto 8003.
 
 Capacidades principales:
 - completions generales para consumidores internos,
 - decision/evaluacion estructurada para ciclos agenticos,
+- extraccion de insights con endpoint dedicado,
 - embeddings para ranking semantico,
 - generacion CIF,
 - endpoints operativos de salud y metadata.
@@ -26,6 +27,7 @@ Capacidades principales:
 - Mantener separacion de responsabilidades:
   - `api/v2`: contrato HTTP,
   - `api/v2/service.py`: orquestacion de runtime,
+  - `api/v2/models.py`: prompts/parseo JSON para decision y evaluacion,
   - `services/*`: implementaciones reutilizables,
   - `models/registry.py`: fuente unica de nombres de modelos.
 
@@ -39,7 +41,9 @@ Estructura relevante:
 - `src/api/app.py`: inicializa FastAPI con lifespan v2.
 - `src/api/router.py`: monta unicamente `v2`.
 - `src/api/v2/router.py`: endpoints publicos.
-- `src/api/v2/service.py`: fabrica `V2RuntimeServices` + `EmbeddingsService`.
+- `src/api/v2/service.py`: fabrica `V2RuntimeServices` (chat, cif, embeddings, decision, evaluator, insights).
+- `src/api/v2/models.py`: `DecisionModel` y `EvaluatorModel` (parseo JSON robusto).
+- `src/api/v2/scheme.py`: contratos Pydantic de requests/responses v2.
 - `src/services/ollama_client.py`: cliente unico para chat/embeddings/list/pull.
 - `src/services/generation_service.py`: ChatService, CifService, InfoService.
 - `src/services/model_service.py`: LoadModelsService.
@@ -104,9 +108,11 @@ Entrada:
 - `texts: List[str]` (minimo 1)
 
 Flujo:
-1. `EmbeddingsService` mantiene orden de entrada.
-2. Usa `OllamaClient.embed_batch(...)` con `EMBEDDING_MODEL`.
-3. Verifica cardinalidad (`len(embeddings) == len(texts)`).
+1. Router valida payload.
+2. `runtime_services.embeddings.embed_texts(...)` usa servicio singleton del runtime.
+3. `EmbeddingsService` mantiene orden de entrada.
+4. Usa `OllamaClient.embed_batch(...)` con `EMBEDDING_MODEL`.
+5. Verifica cardinalidad (`len(embeddings) == len(texts)`).
 
 Salida:
 - `{"embeddings": [[float, ...], ...]}`
@@ -120,9 +126,9 @@ Entrada (`DecisionModelInput`):
 - query, intent, state_summary, tools_available, history, current_attempt.
 
 Flujo:
-1. Construccion de prompt estructurado.
-2. Llamada a `DecisionModel.call(...)`.
-3. `DecisionModel` usa `OllamaClient.chat(...)`.
+1. Router valida payload.
+2. `runtime_services.decision.call(...)` delega en `DecisionService`.
+3. `DecisionService` usa `DecisionModel` con modelo `GENERATION_MODELS["evaluator"]`.
 4. Parse de JSON estricto + validacion Pydantic.
 
 Salida (`DecisionModelOutput`):
@@ -136,15 +142,41 @@ Entrada (`EvaluatorModelInput`):
 - query, tool_name, tool_result, expected_properties, query_intent, accumulated_context.
 
 Flujo:
-1. Prompt de rubrica (sufficient/insufficient/recoverable_error/terminal_error).
-2. Llamada a `EvaluatorModel.call(...)`.
-3. Parse de JSON + validacion Pydantic.
+1. Router valida payload.
+2. `runtime_services.evaluator.call(...)` delega en `EvaluatorService`.
+3. `EvaluatorService` usa `EvaluatorModel` con `GENERATION_MODELS["evaluator"]`.
+4. Parse de JSON + validacion Pydantic.
 
 Salida (`EvaluatorModelOutput`):
 - `evaluation`, `confidence`, `reasoning`, `missing_properties`.
 
 Errores:
 - `503 evaluator_model_failed: ...`
+
+### 5.8 POST /v2/insights
+Entrada (`InsightRequest`):
+- `query: str`
+- `chunk: str`
+- `title: str = ""`
+- `section: str = ""`
+- `page: int = 0`
+- `max_tokens: int = 180`
+
+Flujo:
+1. Router valida payload.
+2. `runtime_services.insights.extract_insights(...)` delega en `InsightsService`.
+3. `InsightsService` llama `OllamaClient.chat(...)` con `GENERATION_MODELS["evaluator"]`.
+4. Se parsea salida JSON (array o keys `facts`/`extracted_info`).
+
+Salida (`InsightResponse`):
+- `{"insights": ["..."]}`
+
+Errores:
+- `503 insights_failed: ...`
+
+Nota de compatibilidad:
+- `agent_core` debe usar `/v2/insights` para extraccion de insights.
+- `/v2/completions` queda para chat general (modelo final), no para insights.
 
 ## 6. Capa de servicios estandarizada
 
@@ -191,12 +223,19 @@ Componentes:
 - `resolve_keep_alive()`
 - `V2RuntimeServices`
 - `EmbeddingsService`
+- `DecisionService`
+- `EvaluatorService`
+- `InsightsService`
 
-`V2RuntimeServices` inicializa en forma coherente:
+`V2RuntimeServices` inicializa en forma coherente (cliente compartido):
 - `OllamaClient`
 - `LoadModelsService`
 - `ChatService`
 - `CifService`
+- `EmbeddingsService`
+- `DecisionService`
+- `EvaluatorService`
+- `InsightsService`
 - `InfoService`
 
 ## 7. Registro de modelos
@@ -207,6 +246,13 @@ Definiciones:
 - `EMBEDDING_MODEL = "mxbai-embed-large"`
 - `GENERATION_MODELS = {"evaluator", "final", "cif"}`
 - `ALL_MODELS = [EMBEDDING_MODEL] + generation_models`
+
+Asignacion operativa en v2:
+- `/v2/completions` -> `GENERATION_MODELS["final"]`
+- `/v2/cif` -> `GENERATION_MODELS["cif"]`
+- `/v2/decision` -> `GENERATION_MODELS["evaluator"]`
+- `/v2/evaluate` -> `GENERATION_MODELS["evaluator"]`
+- `/v2/insights` -> `GENERATION_MODELS["evaluator"]`
 
 Reglas:
 - no hardcodear nombres de modelo en routers.
@@ -237,7 +283,10 @@ Principal consumidor:
 - `agent_core`
 
 Uso esperado:
-- `POST http://agents:8003/v2/completions` para generacion/evaluacion/insights.
+- `POST http://agents:8003/v2/completions` para generacion general.
+- `POST http://agents:8003/v2/decision` para politica de decision.
+- `POST http://agents:8003/v2/evaluate` para evaluacion de resultados.
+- `POST http://agents:8003/v2/insights` para extraccion RAG de facts.
 - `POST http://agents:8003/v2/embeddings` para embeddings del pipeline hibrido.
 
 Frontend:
@@ -264,7 +313,7 @@ Nota:
 - Logs de startup:
   - keep_alive efectivo,
   - preferencia y deteccion de GPU.
-- Logs por endpoint de decision/evaluacion ante fallos.
+- Logs por endpoint de decision/evaluacion/insights ante fallos.
 - Health endpoint:
   - `GET /v2/health` para probes de orquestacion.
 
@@ -275,11 +324,12 @@ Nota:
 - `AGENTS_OLLAMA_PREFER_GPU`
   - `true/false`.
 
-- `AGENTS_DECISION_MODEL`
-  - modelo para decision/evaluacion v2 (default Qwen).
-
 - `NVIDIA_VISIBLE_DEVICES`
   - soporte de deteccion/ejecucion con GPU en Docker.
+
+Nota:
+- `AGENTS_DECISION_MODEL` ya no participa en el wiring de runtime v2.
+- La seleccion de modelos de decision/evaluacion/insights viene de `GENERATION_MODELS["evaluator"]` en registry.
 
 ## 15. Contratos y compatibilidad
 Estado de versionado:
@@ -288,6 +338,7 @@ Estado de versionado:
 
 Compatibilidad requerida en consumidores:
 - cualquier consumidor que apunte a `/v1/*` debe migrar a `/v2/*`.
+- para insights, usar `/v2/insights` en lugar de `/v2/completions`.
 
 ## 16. Despliegue (Docker)
 - Base de imagen: `ollama/ollama:latest`.
@@ -306,7 +357,7 @@ Implementacion actual:
 
 ## 18. Resumen ejecutivo
 - Servicio consolidado en `v2`.
-- Servicios de chat/CIF/embeddings/model lifecycle estandarizados sobre `OllamaClient`.
-- Registro central de modelos activo.
+- Runtime unificado en `V2RuntimeServices` con cliente Ollama compartido.
+- Endpoints de decision/evaluacion/insights centralizados y coherentes con registry.
 - Contratos HTTP claros para `agent_core`.
 - Eliminada dependencia operativa de `v1`.
