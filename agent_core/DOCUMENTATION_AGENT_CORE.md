@@ -1,457 +1,222 @@
-# Agent Core v3 - Documentación General
+# Agent Core - Documentación General
 
-**Descripción de propósito, arquitectura y garantías del sistema**
-
----
-
-## 1. ¿Qué es Agent Core v3?
-
-Agent Core v3 es un **agente híbrido controlado** para consultas sobre materiales científicos. Combina:
-- Decisiones locales determinísticas
-- Evaluación asistida por modelo (pero acotada)
-- Ejecución de herramientas con contratos estrictos
-- Una única llamada final al modelo para redactar la respuesta
-
-Está diseñado para garantizar **reproducibilidad, observabilidad y control** sobre el comportamiento del agente.
+**Descripción general del propósito, arquitectura y garantías del sistema**
 
 ---
 
-## 2. Objetivo del Servicio
+## 1. ¿Qué es Agent Core?
 
-Proporcionar un endpoint HTTP que acepte consultas de materiales y retorne respuestas informadas mediante:
+Agent Core es un agente híbrido controlado para consultas sobre materiales científicos.
+Combina:
+- política local determinística,
+- evaluación asistida por modelo con rol acotado,
+- ejecución de herramientas bajo contratos estrictos,
+- una llamada final única al modelo para redacción.
 
-1. **Control Local Determinístico:** La selección de herramientas y el flujo se deciden mediante políticas locales, sin depender del modelo.
-2. **Evaluación Acotada:** Un evaluador (LLM) emite señales sobre calidad de evidencia, pero NO controla el flujo.
-3. **Herramientas con Contratos:** Cada herramienta valida entrada/salida contra JSON schemas estrictos.
-4. **Una Llamada Final:** Solo se llama al modelo UNA VEZ para redactar la respuesta, después de acumular toda la evidencia.
+Su objetivo principal es mantener reproducibilidad, observabilidad y control operativo.
 
 ---
 
-## 3. Arquitectura Funcional
+## 2. Objetivo del servicio
+
+Exponer un endpoint HTTP (`POST /v3/completions`) que reciba una consulta y produzca una respuesta basada en evidencia acumulada mediante loop de herramientas.
+
+Principios:
+1. El loop de ejecución es determinístico y controlado por presupuesto.
+2. Las herramientas se ejecutan con validación de entrada/salida.
+3. El evaluador emite señales de suficiencia, pero no ejecuta herramientas ni altera contratos.
+4. La redacción final se hace en una sola llamada al modelo al terminar el loop.
+
+---
+
+## 3. Modos de ejecución
+
+`agent_core` soporta dos modos seleccionados por variable de entorno:
+- `AGENT_POLICY_MODE=legacy`
+- `AGENT_POLICY_MODE=planned`
+
+### 3.1 Modo legacy
+- Clasifica intención por heurísticas de texto.
+- Selecciona herramientas por scoring determinístico + precondiciones.
+- Construye argumentos de forma determinística.
+
+### 3.2 Modo planned
+- Ejecuta un runtime dedicado v4 (planner + loop + evaluator propios de v4).
+- Flujo real:
+  1. construye catálogo de herramientas desde `ToolRegistry`,
+  2. solicita plan one-shot vía `POST {AGENTS_URL}/v2/completions`,
+  3. valida y filtra el plan localmente,
+  4. ejecuta el plan en loop v4,
+  5. permite modificaciones acotadas del plan durante el loop (máximo 2, sólo después del cursor).
+- Si el planner falla o devuelve plan inválido, aplica fallback inmediato a ejecución legacy.
+
+---
+
+## 4. Arquitectura funcional (alto nivel)
 
 ```mermaid
 flowchart TD
-    A[User Query] --> B[Build Initial AgentState]
-    B --> C[Deterministic PolicyEngine]
-    C --> D[Tool Preconditions + Input Validation]
-    D --> E[Tool Execution]
-    E --> F[State Mutation]
-    F --> G[Evaluator Signal]
-    G --> H{sufficient evidence?}
-    H -- No --> C
-    H -- Yes --> I[ContextBuilder]
-    I --> J[Single Final Model Call]
-    J --> K[Response / SSE Event Stream]
-```
-
-### Componentes Clave
-
-| Componente | Función | Determinístico |
-|---|---|---|
-| **AgentState** | Fuente única de verdad: materiales, documentos, insights, restricciones | ✅ |
-| **PolicyEngine** | Clasifica intent, puntúa herramientas, selecciona por argmax | ✅ |
-| **ToolRegistry** | Valida esquemas entrada/salida, verifica precondiciones | ✅ |
-| **run_loop** | Orquesta iteraciones, maneja errores, verifica terminación | ✅ |
-| **Evaluator** | Emite señales (sufficient, confidence, missing_info) | ⚠️ (LLM) |
-| **ContextBuilder** | Compila evidencia en contexto para response final | ✅ |
-| **CompletionServiceV3** | Orquesta el flujo HTTP, maneja SSE | ✅ |
-
----
-
-## 4. Flujo End-to-End (Visión General)
-
-```
-1. Usuario envía POST /v3/completions con query + presupuesto
-
-2. Se crea AgentState con límites:
-   ├─ max_iterations (default 10)
-   ├─ max_tool_calls (default 15)
-   ├─ max_context_tokens (default 4096)
-   └─ max_wall_time_ms (default 60000)
-
-3. Loop iterativo:
-   ├─ PolicyEngine clasifica intent y selecciona herramienta
-   ├─ Herramienta ejecuta (con validación entrada/salida)
-   ├─ AgentState se actualiza con resultados
-   ├─ Evaluador emite señal de calidad
-   └─ Si sufficient == true O límites excedidos → ir a paso 4
-
-4. ContextBuilder compila toda la evidencia en un contexto
-
-5. LLM (LLAMADA ÚNICA) redacta respuesta basada en contexto
-
-6. Se persiste traza JSON completa por request_id
-
-7. Se retorna:
-   ├─ JSON con response + metadata
-   └─ O secuencia SSE si stream=true
+    A[User Query] --> B[Build AgentState + Budget]
+  B --> C{Mode}
+  C -- legacy --> D[Loop v3 deterministic]
+  C -- planned --> E[Planner v4 one-shot]
+  E --> F{Plan valido?}
+  F -- no --> D
+  F -- yes --> G[Loop v4 con evaluador y cambios acotados de plan]
+  D --> H[ContextBuilder v3]
+  G --> I[Context builder v4]
+  H --> J[Single Final Model Call]
+  I --> J
+  J --> K[JSON/SSE + Trace]
 ```
 
 ---
 
-## 5. Garantías Arquitectónicas
+## 5. Flujo end-to-end (resumen)
 
-### 5.1 Determinismo del Ciclo de Decisión
-
-La selección de herramientas es **100% determinística** y no depende de modelo:
-
-```
-Intent Classification    → (heurísticas por palabras clave)
-Precondition Filtering   → (booleano contra state)
-Policy Scoring          → (fórmula numérica)
-Tool Selection          → (argmax de scores)
-Argument Building       → (reglas por tipo)
-```
-
-**Garantía:** Misma query + mismo state → siempre misma selección de herramienta.
-
-### 5.2 Evaluación Acotada
-
-El evaluador (LLM) **NO controla el flujo**:
-
-```
-Lo que NO hace:
-├─ NO elige herramienta siguiente
-├─ NO modifica pesos o scores
-├─ NO fuerza continuación
-└─ NO rompe el flujo
-
-Lo que SÍ hace:
-├─ Emite: sufficient (bool), confidence (float), missing_info (array)
-└─ Policy lo usa para decidir si continuar iterando
-```
-
-**Garantía:** Comportamiento predecible y auditable.
-
-### 5.3 Validación de Contratos
-
-Cada herramienta tiene:
-
-```
-Input Schema:  Valida parámetros ANTES de ejecutar
-Output Schema: Valida resultado DESPUÉS de ejecutar
-Preconditions: Define qué debe existir en AgentState
-```
-
-**Garantía:** Propagación de errores clara y controlada.
-
-### 5.4 Una Sola Llamada Final al Modelo
-
-```
-NO:
-├─ Llamadas inline (para seleccionar herramientas)
-├─ Llamadas paralelo (para comparaciones)
-└─ Llamadas reiterativas (para refinamiento)
-
-SÍ:
-└─ UNA LLAMADA después de evidencia completa → redacta
-```
-
-**Garantía:** Costo predecible, latencia controlada.
+1. Usuario envía `POST /v3/completions`.
+2. Se crea `AgentState` con límites (`max_iterations`, `max_tool_calls`, `max_context_tokens`, `max_wall_time_ms`).
+3. En modo `legacy`, por iteración:
+  - policy determinística decide herramienta,
+  - se valida contrato de entrada,
+  - se ejecuta herramienta,
+  - se valida contrato de salida,
+  - se muta estado,
+  - evaluador v3 emite señal de suficiencia para stop gating.
+4. En modo `planned`, por iteración:
+  - se ejecuta el paso en cursor del plan v4,
+  - se valida entrada/salida,
+  - evaluador v4 decide continuar/parar y puede sugerir cambios acotados de plan.
+5. Al cumplirse condición de término, se construye contexto final.
+6. Se hace una sola llamada final al modelo de respuesta.
+7. Se persiste traza y se devuelve JSON o SSE.
 
 ---
 
-## 6. Herramientas Disponibles
+## 6. Garantías arquitectónicas
 
-### Estado: Producción ✅
+### 6.1 Invariante de control
+Existe una sola entrada pública (`/v3/completions`) y dos runtimes internos:
+- `legacy` usa loop v3 determinístico.
+- `planned` usa runtime v4 basado en plan.
 
-| Herramienta | ¿Qué Hace? | Entrada | Salida |
-|---|---|---|---|
-| **query_materials** | Busca en Materials Project | material_id ó formula ó chemsys | Lista de materiales |
-| **search_scientific_documents** | Descubre y rankea papers científicos multi-fuente | query (+ providers) | Lista de documentos normalizados |
-| **validate_constraints** | Valida restricciones | constraints | Materiales que cumplen |
-| **document_rag (#sym:DocumentRAGTool)** | Descarga documentos completos, chunking semántico y extracción RAG híbrida | documents[] + query | Evidencia estructurada a nivel chunk/párrafo |
+### 6.2 Determinismo operativo
+- Selección final de herramienta y validación de contratos se mantienen bajo reglas locales.
+- Precondiciones y validaciones bloquean pasos inválidos.
 
-### Estado: Parcial / En transición ⚠️
+### 6.3 Evaluación acotada
+El evaluador sólo aporta señales de calidad (`suficiencia`, `confianza`, `riesgo`) para el criterio de parada.
+No selecciona herramientas ni ejecuta acciones.
 
-| Herramienta | Descripción | Estado actual |
-|---|---|---|
-| **generate_structure** | Generar estructura CIF/POSCAR/JSON | Pipeline real (parser + prompt builder + validación física), dependiente de servicio LLM remoto |
-
-### Estado: STUB (No Producción) 🟡
-
-| Herramienta | Descripción | Acción |
-|---|---|---|
-| **compare_materials** | Comparar materiales | Tiene precondiciones/schema/logging, pero usa valores sintéticos (falta comparación real) |
+### 6.4 Coste predecible de redacción
+La respuesta final del asistente se produce con una única llamada de modelo posterior a la recolección de evidencia.
 
 ---
 
-## 7. Endpoints HTTP
+## 7. Herramientas registradas
+
+Catálogo actual en `src/tools/config.py`:
+- `query_materials_database`
+- `validate_material_constraints`
+- `search_scientific_documents`
+- `document_rag`
+- `generate_crystal_structure`
+
+---
+
+## 8. Endpoint principal
 
 ### `POST /v3/completions`
 
-**Solicitud:**
+Entrada típica:
 ```json
 {
   "query": "Find materials with band gap > 2.0 eV",
   "stream": false,
   "temperature": 0.2,
-  "max_iterations": 10,
-  "max_tool_calls": 15,
-  "max_context_tokens": 4096,
-  "max_wall_time_ms": 60000
+  "max_iterations": 8,
+  "max_tool_calls": 8,
+  "max_context_tokens": 2048,
+  "max_wall_time_ms": 30000
 }
 ```
 
-**Respuesta (JSON):**
-```json
-{
-  "id": "req-abc123",
-  "object": "text_completion",
-  "choices": [{
-    "text": "I found 5 materials with band gap > 2.0 eV..."
-  }],
-  "metadata": {
-    "stop_reason": "sufficient_evidence",
-    "iterations_count": 3,
-    "tool_calls_count": 3,
-    "elapsed_ms": 3500,
-    "materials_found": 5,
-    "documents_found": 12
-  }
-}
-```
+Salida:
+- respuesta textual en `choices[0].text`,
+- metadata de ejecución (stop_reason, iteraciones, tool_calls, tiempos, conteos de evidencia).
 
-**Respuesta (SSE):**
-```
-event: start
-data: {"request_id": "req-abc123"}
-
-event: loop_done
-data: {"stop_reason": "sufficient_evidence", "iterations": 3}
-
-event: final
-data: {"response": "I found 5 materials..."}
-```
+Si `stream=true`, los eventos SSE dependen del modo:
+- `legacy`: `start`, `loop_done`, `final`
+- `planned`: `start`, `tool_start`, `tool_result`, `evaluation`, `plan_modified` (opcional), `stop`, `final`
 
 ---
 
-## 8. Variables de Entorno
+## 9. Variables de entorno (visión general)
 
-```bash
-# API Keys
-MP_API_KEY=your_key
-SEMANTIC_SCHOLAR_API_KEY=optional_key
-CROSSREF_EMAIL=your_email@example.com
+Variables principales en agent_core:
+- `AGENT_POLICY_MODE` (`legacy|planned`)
+- `AGENTS_URL`
+- `AGENTS_SERVICE_URL`
+- `AGENT_EVALUATOR_STOP_TAU`
+- `AGENT_PLANNER_MODEL`
+- `AGENT_EVALUATOR_MODEL`
+- `MP_API_KEY`
+- `SEMANTIC_SCHOLAR_API_KEY`
+- `CROSSREF_EMAIL`
+- `UNPAYWALL_EMAIL`
+- `CORS_ALLOW_ORIGINS`
+- `AGENT_TRACE_DIR`
 
-# URLs de Servicios
-AGENTS_URL=http://agents:8003
-AGENTS_SERVICE_URL=http://agents:8000
-
-# Modelos
-AGENT_EVALUATOR_MODEL=Qwen2.5-7B-Instruct-1M
-AGENT_INSIGHTS_MODEL=Qwen2.5-7B-Instruct-1M
-
-# Configuración
-CORS_ALLOW_ORIGINS=http://localhost:3000
-AGENT_TRACE_DIR=agent_core/data/traces
-```
-
----
-
-## 9. Decisiones de Diseño
-
-### ¿Por qué Policy Local?
-```
-✅ Determinístico: Reproduce siempre igual
-✅ Rápido: Sin LLM call
-✅ Auditable: Reglas claras
-✅ Controlable: Ajusta pesos → cambia comportamiento
-```
-
-### ¿Por qué Evaluador Acotado?
-```
-✅ Separa concerns: Evidence gathering ≠ Policy control
-✅ Previene loops infinitos: Policy decide, evaluador señala
-✅ Bajo costo: Señal simple
-✅ Graceful degradation: Fallback si LLM falla
-```
-
-### ¿Por qué Validación de Esquemas?
-```
-✅ Errores locales: Falla rápido
-✅ Contrato explícito: JSON Schema define interface
-✅ Testing simple: Valida contra spec
-✅ Composable: Múltiples herramientas sin acoplamiento
-```
-
-### ¿Por qué Una Sola Llamada?
-```
-✅ Costo predecible: 1 LLM call
-✅ Coherencia: Respuesta basada en contexto acumulado
-✅ Observabilidad: Todo visible antes de escribir
-✅ Control: Prompt final personalizable
-```
+Nota de ownership:
+- La selección de modelos LLM está centralizada en servicio `agents`.
+- `agent_core` consume esos modelos vía contratos HTTP (`/v2/*`).
+- `AGENTS_SERVICE_URL` se usa para embeddings (`/v2/embeddings`) en herramientas como `search_scientific_documents` y `document_rag`.
 
 ---
 
-## 10. Tabla Resumen de Herramientas
+## 10. Observabilidad y trazas
 
-| Herramienta | Status | Tiempo | Costo | Determinístico |
-|---|---|---|---|---|
-| query_materials_database | ✅ Prod | 150-3000ms | Bajo | 100% |
-| search_scientific_documents | ✅ Prod | 600-4000ms | Medio | 99% |
-| validate_material_constraints | ✅ Prod | 20-50ms | Muy bajo | 100% |
-| document_rag | ✅ Prod | 1500-8000ms | Alto | 85% |
-| compare_materials | 🟡 STUB | <5ms | Muy bajo | 100% (mock) |
-| generate_crystal_structure | ⚠️ PARCIAL | 1200-6000ms | Medio-alto | 80-90% |
+Cada request persiste una traza en `AGENT_TRACE_DIR/{request_id}.json`.
+
+Comportamiento actual por modo:
+- `legacy`: persiste al final del flujo.
+- `planned`: persiste incrementalmente en cada evento del loop.
 
 ---
 
-## 11. Condiciones de Terminación
+## 11. Inicio rápido
 
-El loop termina si se cumple **cualquiera** de:
-
-**✅ Successful Termination:**
-```
-sufficient_evidence    → Evaluador indica evidencia suficiente
-max_iterations        → Iteraciones máximas alcanzadas
-max_tool_calls        → Tool calls máximas alcanzadas
-max_context_tokens    → Contexto máximo alcanzado
-max_wall_time_ms      → Tiempo máximo alcanzado
-```
-
-**❌ Error Termination:**
-```
-no_valid_tools        → Ninguna herramienta disponible
-tool_validation_failed → Input/output schema inválido
-tool_error            → Herramienta retornó error
-```
-
----
-
-## 12. Flujo de Información
-
-```
-User Query
-    ↓
-Policy (determinístico) selecciona herramienta
-    ↓
-Tool execution → acumula evidencia
-    ↓
-Evaluator (LLM) emite signals (no controla)
-    ↓
-Policy decide si continuar
-    ↓
-[Loop until sufficient]
-    ↓
-ContextBuilder compila evidencia
-    ↓
-LLM (UNA LLAMADA) redacta respuesta
-    ↓
-Response + Metadata + Persist Trace
-```
-
----
-
-## 13. Manejo de Errores
-
-### Validación
-```
-Input malformado     → VALIDATION_ERROR → Stop
-API call falsa       → API_ERROR → Evaluador decide
-JSON parsing falla   → UNEXPECTED_ERROR → Log & continue
-Schema inválido      → VALIDATION_ERROR → Stop
-```
-
-### Fallback Graceful
-```
-Sin evaluador        → fallback conservador
-Sin embeddings       → TF-IDF graceful degradation
-Tool timeout         → error explícito
-LLM falla           → extracción parcial (resultados sin extracted_info)
-```
-
-### 13.a Logging Operativo por Tool
-
-Todas las herramientas implementadas emiten logs estructurados en cuatro fases:
-
-1. Inicio de ejecución (inputs principales)
-2. Procesamiento intermedio (conteos/etapas)
-3. Resultado final (success con métricas)
-4. Error/fallback (warning/error con motivo)
-
-Este patrón permite auditoría de flujo real y troubleshooting sin inspeccionar trazas crudas.
-Para detalle por herramienta, revisar la sección 5.x en `TECHNICAL_DOCUMENTATION_AGENT_CORE.md`.
-
----
-
-## 14. Observabilidad
-
-### Request Tracing
-
-Cada request genera un JSON persistido en `AGENT_TRACE_DIR/{request_id}.json`:
-
-```json
-{
-  "request_id": "req-abc123",
-  "query": "Find materials...",
-  "tool_execution_history": [
-    {"iteration": 1, "tool": "query_materials", "elapsed_ms": 450},
-    ...
-  ],
-  "evaluator_feedback_history": [
-    {"sufficient": false, "confidence": 0.65},
-    ...
-  ],
-  "final_response": "I found...",
-  "metadata": {
-    "stop_reason": "sufficient_evidence",
-    "total_iterations": 3,
-    "total_tool_calls": 3
-  }
-}
-```
-
----
-
-## 15. Inicio Rápido
-
-### Instalación
-
+Instalación:
 ```bash
 cd agent_core/
 pip install -r requirements.txt
 cp .env.example .env
-# Editar .env con credenciales
 ```
 
-### Ejecutar
-
+Ejecución:
 ```bash
 python -m src.api.app
-# Swagger UI en http://localhost:8000/docs
 ```
 
-### Probar
-
+Prueba básica:
 ```bash
 curl -X POST http://localhost:8000/v3/completions \
   -H "Content-Type: application/json" \
-  -d '{
-    "query": "Find silicon with band gap > 1 eV",
-    "max_iterations": 5
-  }'
+  -d '{"query":"Find silicon with band gap > 1 eV"}'
 ```
 
 ---
 
-## 16. Para Detalles Técnicos Profundos
+## 12. Referencia técnica profunda
 
-Consulta **[TECHNICAL_DOCUMENTATION_AGENT_CORE.md](TECHNICAL_DOCUMENTATION_AGENT_CORE.md)** para:
+La especificación detallada (contratos completos, fórmulas de scoring, prompts, algoritmos internos, flujo de planner/evaluator, tablas extensas de herramientas y errores) se mantiene en:
 
-- **Policy Engine:** Fórmulas de scoring, ejemplos numéricos, clasificación de intent
-- **Evaluator:** Prompt template, fallback robusto, JSON parsing
-- **Loop:** Orden exacto de pasos cada iteración, todos los stop reasons
-- **AgentState:** Estructura completa, métodos críticos, mutaciones
-- **Cada Herramienta:** Contratos JSON Schema entrada/salida, flujos internos, lógica de ranking, costos computacionales, matrices de error
-- **ToolRegistry:** Validación de esquemas, precondiciones
-- **Endpoints:** Request/response schemas completos con ejemplos
-- **Persistencia:** Formato de trazas JSON, observabilidad
-- **Variables de Entorno:** Lista completa con descripciones detalladas
+- `TECHNICAL_DOCUMENTATION_AGENT_CORE.md`
+
+Este documento (`DOCUMENTATION_AGENT_CORE.md`) está intencionalmente orientado a visión general.
 
 ---
 
-**Última actualización:** Marzo 27, 2026  
-**Versión:** v3.1  
-**Rama:** Documentación consolidada
+**Última actualización:** Abril 7, 2026
+**Versión:** v3.4
+**Tipo de documento:** General/Ejecutivo

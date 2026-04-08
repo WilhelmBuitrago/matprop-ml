@@ -55,8 +55,6 @@ def make_service(monkeypatch, tmp_path, fake_requests_post):
 
     monkeypatch.setenv("AGENT_TRACE_DIR", str(tmp_path / "traces"))
     monkeypatch.setenv("AGENTS_URL", "http://agents:8003")
-    monkeypatch.setenv("AGENT_EVALUATOR_MODEL", "Qwen2.5-7B-Instruct-1M")
-    monkeypatch.setenv("AGENT_INSIGHTS_MODEL", "Qwen2.5-7B-Instruct-1M")
 
     from api.v3.service import CompletionServiceV3
 

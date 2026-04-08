@@ -11,19 +11,6 @@ def _state() -> AgentState:
     )
 
 
-def test_compare_materials_precondition_requires_two_materials():
-    state = _state()
-    assert TOOL_REGISTRY.can_run("compare_materials", state) is False
-
-    state.materials_found.append(
-        MaterialRecord(material_id="mp-149", formula="Si", properties={})
-    )
-    state.materials_found.append(
-        MaterialRecord(material_id="mp-804", formula="GaAs", properties={})
-    )
-    assert TOOL_REGISTRY.can_run("compare_materials", state) is True
-
-
 def test_document_rag_requires_documents():
     state = _state()
     assert TOOL_REGISTRY.can_run("document_rag", state) is False

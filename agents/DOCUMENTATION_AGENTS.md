@@ -1,53 +1,54 @@
 # Servicio Agents (Ollama Runtime)
 
 ## 1. Nombre del servicio
-Agents Runtime API
+Agents Runtime API (v2)
 
-## 2. Descripcion
-Servicio FastAPI que actua como gateway local sobre Ollama para inferencia y utilidades de ciclo agentico.
+## 2. Descripción
+Servicio FastAPI que actúa como runtime local de modelos sobre Ollama para consumo interno del ecosistema matprop-ml.
 
-Version actual:
-- Arquitectura `v2` only (se elimino `v1`).
-- Capa de servicios estandarizada y centralizada en `V2RuntimeServices`.
-- API HTTP expuesta en puerto 8003.
+Estado actual:
+- Arquitectura pública consolidada en `v2`.
+- Capa de servicios estandarizada en `V2RuntimeServices`.
+- Exposición HTTP en puerto `8003`.
 
 Capacidades principales:
-- completions generales para consumidores internos,
-- decision/evaluacion estructurada para ciclos agenticos,
-- extraccion de insights con endpoint dedicado,
-- embeddings para ranking semantico,
-- generacion CIF,
-- endpoints operativos de salud y metadata.
+- completions generales,
+- evaluación/decisión estructurada,
+- extracción de insights,
+- planificación y validación de plan,
+- embeddings,
+- soporte de generación cristalina,
+- endpoints operativos de salud e información.
 
 ## 3. Rol dentro del sistema
-- Proveer runtime local de modelos para servicios internos.
-- Centralizar llamadas a Ollama mediante un cliente unificado.
-- Resolver bootstrapping de modelos en arranque.
+- Centralizar inferencia local con un cliente único (`OllamaClient`).
+- Resolver selección de modelos vía variables de entorno en un único registry.
 - Exponer contratos HTTP estables para `agent_core`.
-- Mantener separacion de responsabilidades:
-  - `api/v2`: contrato HTTP,
-  - `api/v2/service.py`: orquestacion de runtime,
-  - `api/v2/models.py`: prompts/parseo JSON para decision y evaluacion,
-  - `services/*`: implementaciones reutilizables,
-  - `models/registry.py`: fuente unica de nombres de modelos.
+- Cargar modelos requeridos al arranque (`download_models`).
+- Mantener separación de responsabilidades:
+  - `api/v2`: contrato HTTP
+  - `api/v2/service.py`: orquestación runtime
+  - `api/v2/models.py`: clases de modelo (prompt + parseo + validación)
+  - `services/*`: servicios reutilizables
+  - `models/registry.py`: ownership de selección de modelos
 
 ## 4. Arquitectura de alto nivel
-- Framework: FastAPI.
-- Runtime de modelos: Ollama local (SDK Python `ollama`).
-- Versionado: solo prefijo `/v2`.
-- Arranque: lifespan de `v2`.
+- Framework: FastAPI
+- Runtime de modelos: Ollama (`ollama` SDK Python)
+- Versionado expuesto: `/v2`
+- Arranque: lifespan definido en `api/v2/router.py`
 
 Estructura relevante:
-- `src/api/app.py`: inicializa FastAPI con lifespan v2.
-- `src/api/router.py`: monta unicamente `v2`.
-- `src/api/v2/router.py`: endpoints publicos.
-- `src/api/v2/service.py`: fabrica `V2RuntimeServices` (chat, cif, embeddings, decision, evaluator, insights).
-- `src/api/v2/models.py`: `DecisionModel` y `EvaluatorModel` (parseo JSON robusto).
-- `src/api/v2/scheme.py`: contratos Pydantic de requests/responses v2.
-- `src/services/ollama_client.py`: cliente unico para chat/embeddings/list/pull.
-- `src/services/generation_service.py`: ChatService, CifService, InfoService.
-- `src/services/model_service.py`: LoadModelsService.
-- `src/models/registry.py`: `EMBEDDING_MODEL`, `GENERATION_MODELS`, `ALL_MODELS`.
+- `src/api/app.py`: inicializa FastAPI con lifespan v2
+- `src/api/router.py`: monta únicamente router `v2`
+- `src/api/v2/router.py`: rutas públicas v2
+- `src/api/v2/scheme.py`: contratos Pydantic
+- `src/api/v2/service.py`: `V2RuntimeServices` y wrappers por capacidad
+- `src/api/v2/models.py`: `DecisionModel`, `EvaluatorModel`, `InsightsModel`, `PlannerModel`
+- `src/services/ollama_client.py`: cliente único para chat/embeddings/list/pull
+- `src/services/generation_service.py`: `ChatService`, `CifService`, `InfoService`
+- `src/services/model_service.py`: `LoadModelsService`
+- `src/models/registry.py`: resolución de modelos desde env
 
 ## 5. Endpoints expuestos (v2)
 
@@ -56,80 +57,32 @@ Entrada (`CompletionRequest`):
 - `history: List[Dict[str, str]]`
 - `temperature: float = 0.7`
 - `max_tokens: int = 512`
+- `model_name: str | None = None` (override opcional)
+- `stop_tokens: List[str] = []`
 
 Flujo:
 1. Router valida payload.
 2. `runtime_services.chat.chat(...)` delega a `ChatService`.
-3. `ChatService` usa `OllamaClient.chat(...)` con modelo de `GENERATION_MODELS["final"]`.
+3. `ChatService` usa `OllamaClient.chat(...)` con:
+   - modelo por defecto `GENERATION_MODELS["final"]`, o
+   - `model_name` si viene explícito.
 
 Salida:
-- texto de respuesta (`message.content`) del modelo.
-
-Errores:
-- `503 runtime_services_unavailable` si runtime no esta listo.
-- `503 chat_failed: ...` ante fallo de inferencia.
-
-### 5.2 GET /v2/info
-Flujo:
-- Router delega a `runtime_services.info.get_info()`.
-
-Salida esperada:
-- `service`
-- `ChatService.Model`
-- `ChatService.Version`
-- `policy_version`
-
-### 5.3 GET /v2/health
-Salida:
-- `{"status": "ok"}`
-
-Uso:
-- probes de healthcheck de Docker Compose para el servicio `agents`.
-
-### 5.4 POST /v2/cif
-Entrada (`CifRequest`):
-- `compound_name: str`
-- `max_tokens: int = 512`
-
-Flujo:
-1. Router valida payload.
-2. `runtime_services.cif.get_cif(...)` delega a `CifService`.
-3. `CifService` usa `OllamaClient.chat(...)` con modelo `GENERATION_MODELS["cif"]`.
-
-Salida:
-- `{"cif": "..."}`
+- string con `message.content`.
 
 Errores:
 - `503 runtime_services_unavailable`
-- `503 cif_failed: ...`
+- `503 chat_failed: ...`
 
-### 5.5 POST /v2/embeddings
-Entrada:
-- `texts: List[str]` (minimo 1)
-
-Flujo:
-1. Router valida payload.
-2. `runtime_services.embeddings.embed_texts(...)` usa servicio singleton del runtime.
-3. `EmbeddingsService` mantiene orden de entrada.
-4. Usa `OllamaClient.embed_batch(...)` con `EMBEDDING_MODEL`.
-5. Verifica cardinalidad (`len(embeddings) == len(texts)`).
-
-Salida:
-- `{"embeddings": [[float, ...], ...]}`
-
-Errores:
-- `400` si lista invalida.
-- `500 embedding service failed` en fallo de backend o respuesta invalida.
-
-### 5.6 POST /v2/decision
+### 5.2 POST /v2/decision
 Entrada (`DecisionModelInput`):
-- query, intent, state_summary, tools_available, history, current_attempt.
+- `query`, `intent`, `state_summary`, `tools_available`, `history`, `current_attempt`
 
 Flujo:
 1. Router valida payload.
 2. `runtime_services.decision.call(...)` delega en `DecisionService`.
-3. `DecisionService` usa `DecisionModel` con modelo `GENERATION_MODELS["evaluator"]`.
-4. Parse de JSON estricto + validacion Pydantic.
+3. `DecisionService` usa `DecisionModel` con `EVALUATOR_MODEL`.
+4. Parseo JSON estricto + validación Pydantic.
 
 Salida (`DecisionModelOutput`):
 - `action`, `tool_name`, `tool_arguments`, `confidence`, `reasoning`.
@@ -137,15 +90,15 @@ Salida (`DecisionModelOutput`):
 Errores:
 - `503 decision_model_failed: ...`
 
-### 5.7 POST /v2/evaluate
+### 5.3 POST /v2/evaluate
 Entrada (`EvaluatorModelInput`):
-- query, tool_name, tool_result, expected_properties, query_intent, accumulated_context.
+- `query`, `tool_name`, `tool_result`, `expected_properties`, `query_intent`, `accumulated_context`
 
 Flujo:
 1. Router valida payload.
 2. `runtime_services.evaluator.call(...)` delega en `EvaluatorService`.
-3. `EvaluatorService` usa `EvaluatorModel` con `GENERATION_MODELS["evaluator"]`.
-4. Parse de JSON + validacion Pydantic.
+3. `EvaluatorService` usa `EvaluatorModel` con `EVALUATOR_MODEL`.
+4. Parseo JSON estricto + validación Pydantic.
 
 Salida (`EvaluatorModelOutput`):
 - `evaluation`, `confidence`, `reasoning`, `missing_properties`.
@@ -153,7 +106,7 @@ Salida (`EvaluatorModelOutput`):
 Errores:
 - `503 evaluator_model_failed: ...`
 
-### 5.8 POST /v2/insights
+### 5.4 POST /v2/insights
 Entrada (`InsightRequest`):
 - `query: str`
 - `chunk: str`
@@ -165,8 +118,8 @@ Entrada (`InsightRequest`):
 Flujo:
 1. Router valida payload.
 2. `runtime_services.insights.extract_insights(...)` delega en `InsightsService`.
-3. `InsightsService` llama `OllamaClient.chat(...)` con `GENERATION_MODELS["evaluator"]`.
-4. Se parsea salida JSON (array o keys `facts`/`extracted_info`).
+3. `InsightsService` usa `InsightsModel` con `INSIGHTS_MODEL`.
+4. Parsea salida tolerando array JSON o claves `extracted_info`/`facts`.
 
 Salida (`InsightResponse`):
 - `{"insights": ["..."]}`
@@ -174,190 +127,231 @@ Salida (`InsightResponse`):
 Errores:
 - `503 insights_failed: ...`
 
-Nota de compatibilidad:
-- `agent_core` debe usar `/v2/insights` para extraccion de insights.
-- `/v2/completions` queda para chat general (modelo final), no para insights.
+### 5.5 POST /v2/planner
+Entrada (`PlannerRequest`):
+- `query: str`
+- `state: Dict[str, Any] = {}`
+- `candidate_tools: List[PlannerCandidateTool] = []`
+- `max_steps: int` en `[1, 3]` (default 3)
+
+Flujo:
+1. Router valida payload.
+2. `runtime_services.planner.build_plan(...)` delega en `PlannerService`.
+3. `PlannerService` usa `PlannerModel` con `PLANNER_MODEL`.
+4. Normaliza plan para conservar sólo steps válidos y herramientas permitidas.
+
+Salida (`PlannerResponse`):
+- `steps: List[PlanningStep]` con máximo 3 pasos.
+
+Errores:
+- `503 planner_failed: ...`
+
+### 5.6 POST /v2/cif
+Entrada (`CifRequest`):
+- `compound_name: str`
+- `max_tokens: int = 512`
+
+Flujo:
+1. Router valida payload.
+2. `runtime_services.cif.get_cif(...)` delega en `CifService`.
+3. `CifService` usa `GENERATION_MODELS["cif"]`.
+
+Salida:
+- `{"cif": "..."}`
+
+Errores:
+- `503 cif_failed: ...`
+
+### 5.7 POST /v2/crystal/spec
+Entrada (`CrystalSpecExtractionRequest`):
+- `query: str`
+- `deterministic_spec: Dict[str, Any] = {}`
+
+Flujo:
+1. Router valida payload.
+2. `runtime_services.crystal_spec.extract(...)` delega en `CrystalSpecExtractionAgent`.
+3. Se retorna objeto con `spec` completado.
+
+Salida:
+- `{"spec": {...}}`
+
+Errores:
+- `503 crystal_spec_failed: ...`
+
+### 5.8 POST /v2/crystal/complete
+Entrada (`CrystalCompletionRequest`):
+- `system_message: str`
+- `user_prompt: str`
+- `temperature: float = 0.3`
+- `max_tokens: int = 768`
+- `stop_tokens: List[str] = []`
+- `model_name: str | None = None`
+
+Flujo:
+1. Router valida payload.
+2. `runtime_services.cif.generate_from_prompt(...)` usa `CifService`.
+
+Salida:
+- `{"raw_generation": "..."}`
+
+Errores:
+- `503 crystal_complete_failed: ...`
+
+### 5.9 POST /v2/embeddings
+Entrada:
+- `texts: List[str]` (mínimo 1)
+
+Flujo:
+1. Router valida payload.
+2. `runtime_services.embeddings.embed_texts(...)` delega en `EmbeddingsService`.
+3. `EmbeddingsService` usa `OllamaClient.embed_batch(...)` con `EMBEDDING_MODEL`.
+4. Verifica cardinalidad (`len(embeddings) == len(texts)`).
+
+Salida:
+- `{"embeddings": [[float, ...], ...]}`
+
+Errores:
+- `400` si lista vacía
+- `500 Embedding service failed: ...`
+
+### 5.10 GET /v2/info
+Salida:
+- metadata del runtime (`service`, `ChatService`, `policy_version`).
+
+### 5.11 GET /v2/health
+Salida:
+- `{"status": "ok"}`
 
 ## 6. Capa de servicios estandarizada
 
-### 6.1 OllamaClient
-Archivo:
-- `src/services/ollama_client.py`
+### 6.1 Patrón de estandarización (service-model)
+Para capacidades con lógica de prompting estructurado (`decision`, `evaluate`, `insights`, `planner`) se aplica un patrón uniforme:
 
-Responsabilidades:
-- `chat(model, messages, options)`
-- `embed(model, text)`
-- `embed_batch(model, texts)`
+1. Clase de modelo en `api/v2/models.py`:
+   - construye prompt,
+   - llama `OllamaClient.chat`,
+   - extrae/normaliza JSON,
+   - valida contra esquema Pydantic.
+2. Wrapper de servicio en `api/v2/service.py`:
+   - instancia la clase de modelo,
+   - expone método estable (`call`, `build_plan`, etc.).
+3. Router en `api/v2/router.py`:
+   - valida request,
+   - delega al wrapper,
+   - mapea errores HTTP.
+
+Resultado: cada servicio tiene su modelo explícito y una interfaz de runtime consistente.
+
+### 6.2 V2RuntimeServices
+`V2RuntimeServices` inicializa, con cliente Ollama compartido:
+- `loader` (`LoadModelsService`)
+- `chat` (`ChatService`)
+- `cif` (`CifService`)
+- `crystal_spec` (`CrystalSpecExtractionAgent`)
+- `embeddings` (`EmbeddingsService`)
+- `decision` (`DecisionService`)
+- `evaluator` (`EvaluatorService`)
+- `insights` (`InsightsService`)
+- `planner` (`PlannerService`)
+- `info` (`InfoService`)
+
+### 6.3 OllamaClient
+Punto único de acceso para:
+- `chat(...)`
+- `embed(...)`
+- `embed_batch(...)`
 - `list_model_names()`
-- `pull_model(model_name)`
+- `pull_model(...)`
 
-Caracteristicas:
-- punto unico de acceso a Ollama,
-- unifica manejo de errores (`RuntimeError`),
-- usa `keep_alive` configurado por runtime.
+## 7. Registro de modelos y ownership
+Fuente única: `src/models/registry.py`.
 
-### 6.2 GenerationService
-Archivo:
-- `src/services/generation_service.py`
+Modelos resueltos por env:
+- `EMBEDDING_MODEL` (`AGENT_EMBEDDING_MODEL`)
+- `EVALUATOR_MODEL` (`AGENT_EVALUATOR_MODEL`)
+- `INSIGHTS_MODEL` (`AGENT_INSIGHTS_MODEL`, fallback a evaluator)
+- `PLANNER_MODEL` (`AGENT_PLANNER_MODEL`, fallback a evaluator)
+- `FINAL_MODEL` (`AGENT_FINAL_MODEL`)
+- `CIF_MODEL` (`AGENT_CIF_MODEL`)
 
-Servicios:
-- `ChatService`
-- `CifService`
-- `InfoService`
-
-### 6.3 ModelService
-Archivo:
-- `src/services/model_service.py`
-
-Servicio:
-- `LoadModelsService`
-
-Responsabilidad:
-- asegurar disponibilidad local de todos los modelos en `ALL_MODELS`.
-
-### 6.4 Runtime v2
-Archivo:
-- `src/api/v2/service.py`
-
-Componentes:
-- `resolve_keep_alive()`
-- `V2RuntimeServices`
-- `EmbeddingsService`
-- `DecisionService`
-- `EvaluatorService`
-- `InsightsService`
-
-`V2RuntimeServices` inicializa en forma coherente (cliente compartido):
-- `OllamaClient`
-- `LoadModelsService`
-- `ChatService`
-- `CifService`
-- `EmbeddingsService`
-- `DecisionService`
-- `EvaluatorService`
-- `InsightsService`
-- `InfoService`
-
-## 7. Registro de modelos
-Fuente unica:
-- `src/models/registry.py`
-
-Definiciones:
-- `EMBEDDING_MODEL = "mxbai-embed-large"`
+Compatibilidad:
 - `GENERATION_MODELS = {"evaluator", "final", "cif"}`
-- `ALL_MODELS = [EMBEDDING_MODEL] + generation_models`
 
-Asignacion operativa en v2:
-- `/v2/completions` -> `GENERATION_MODELS["final"]`
-- `/v2/cif` -> `GENERATION_MODELS["cif"]`
-- `/v2/decision` -> `GENERATION_MODELS["evaluator"]`
-- `/v2/evaluate` -> `GENERATION_MODELS["evaluator"]`
-- `/v2/insights` -> `GENERATION_MODELS["evaluator"]`
+Carga al arranque:
+- `ALL_MODELS` incluye todos los modelos anteriores.
+- `LoadModelsService.download_models()` intenta garantizar disponibilidad local al startup.
 
-Reglas:
-- no hardcodear nombres de modelo en routers.
-- servicios consumen registry directa o indirectamente.
+## 8. Binding de contratos HTTP para agent_core
+Cuando `agent_core` llama endpoints de `agents`, la selección de modelo la decide este servicio por env:
+- `POST /v2/planner` -> `AGENT_PLANNER_MODEL`
+- `POST /v2/completions` -> `AGENT_FINAL_MODEL` (o override `model_name`)
+- `POST /v2/insights` -> `AGENT_INSIGHTS_MODEL`
+- `POST /v2/embeddings` -> `AGENT_EMBEDDING_MODEL`
 
-## 8. Flujo de arranque
-1. FastAPI inicia con lifespan de `v2`.
-2. Se resuelve `keep_alive` (`AGENTS_OLLAMA_KEEP_ALIVE`, default `0s`).
-3. Se detecta disponibilidad GPU (`NVIDIA_VISIBLE_DEVICES` y/o `nvidia-smi -L`).
-4. Se instancia `V2RuntimeServices`.
-5. `LoadModelsService.download_models()` verifica y descarga faltantes.
-6. Servicio queda listo para `v2/*`.
+Regla operativa:
+- El ownership de selección de modelos está en `agents`, no en `agent_core`.
 
-## 9. Dependencias externas
-No consume otros microservicios HTTP del proyecto.
+## 9. Flujo de arranque
+1. FastAPI entra al lifespan v2.
+2. Resuelve `keep_alive` (`AGENTS_OLLAMA_KEEP_ALIVE`, default `0s`).
+3. Detecta disponibilidad GPU (`AGENTS_OLLAMA_PREFER_GPU`, `NVIDIA_VISIBLE_DEVICES`, `nvidia-smi -L`).
+4. Instancia `V2RuntimeServices`.
+5. Ejecuta `runtime_services.download_models()`.
+6. Queda listo para atender `v2/*`.
 
-Dependencias externas reales:
-- Ollama local via SDK Python `ollama`:
-  - `ollama.chat`
-  - `ollama.embeddings`
-  - `ollama.list`
-  - `ollama.pull`
-- Comando de sistema:
-  - `nvidia-smi -L` (deteccion GPU)
+## 10. Variables de entorno
 
-## 10. Consumidores internos del runtime
+### Runtime/GPU
+- `AGENTS_OLLAMA_KEEP_ALIVE` (default `0s`)
+- `AGENTS_OLLAMA_PREFER_GPU` (default `true`)
+- `NVIDIA_VISIBLE_DEVICES` (opcional)
+
+### Selección de modelos
+- `AGENT_EVALUATOR_MODEL`
+- `AGENT_INSIGHTS_MODEL`
+- `AGENT_PLANNER_MODEL`
+- `AGENT_FINAL_MODEL`
+- `AGENT_CIF_MODEL`
+- `AGENT_EMBEDDING_MODEL`
+
+Nota:
+- defaults y fallback se resuelven en `src/models/registry.py`.
+
+## 11. Dependencias externas
+- Ollama local (`ollama.chat`, `ollama.embeddings`, `ollama.list`, `ollama.pull`).
+- Detección opcional por `nvidia-smi`.
+
+## 12. Consumidores internos
 Principal consumidor:
-- `agent_core`
+- `agent_core`.
 
-Uso esperado:
-- `POST http://agents:8003/v2/completions` para generacion general.
-- `POST http://agents:8003/v2/decision` para politica de decision.
-- `POST http://agents:8003/v2/evaluate` para evaluacion de resultados.
-- `POST http://agents:8003/v2/insights` para extraccion RAG de facts.
-- `POST http://agents:8003/v2/embeddings` para embeddings del pipeline hibrido.
+Uso esperado desde `agent_core`:
+- `/v2/completions`, `/v2/insights`, `/v2/embeddings`, `/v2/planner`, y en flujos legacy `/v2/decision`/`/v2/evaluate` según integración.
 
-Frontend:
-- no consume `agents` directamente en flujo principal;
-- consume `agent-core`, que a su vez consume `agents`.
+## 13. Concurrencia y política de memoria
+- `keep_alive=0s` reduce retención de modelos en memoria.
+- `embed_batch` se ejecuta secuencialmente sobre `embed`.
+- El servicio no expone SSE público; responde request/response por endpoint.
 
-## 11. Concurrencia, rendimiento y politica de memoria
-- `keep_alive` configurable via `AGENTS_OLLAMA_KEEP_ALIVE`.
-- default operativo actual: `0s`.
+## 14. Manejo de errores y observabilidad
+- `OllamaClient` encapsula errores como `RuntimeError`.
+- Router v2 mapea excepciones a `HTTP 503/500` por endpoint.
+- Logs de startup incluyen keep_alive, preferencia GPU y detección efectiva.
+- `GET /v2/health` habilita probes de orquestación.
 
-Impacto:
-- menor retencion de memoria,
-- posible incremento de latencia en requests sucesivos.
+## 15. Compatibilidad de versión
+- `v1` no forma parte del contrato operativo actual.
+- Contrato oficial vigente: `v2`.
 
-Nota:
-- No se aplica timeout de aplicacion en las llamadas HTTP `agent_core -> agents` por requisito de negocio actual.
-
-## 12. Manejo de errores
-- Capa de cliente (`OllamaClient`): convierte errores de SDK a `RuntimeError`.
-- Capa API (`v2/router.py`): mapea excepciones a `HTTP 503/500` con detalle por endpoint.
-- Carga de modelos: errores por modelo quedan en log y no detienen el proceso completo.
-
-## 13. Observabilidad
-- Logs de startup:
-  - keep_alive efectivo,
-  - preferencia y deteccion de GPU.
-- Logs por endpoint de decision/evaluacion/insights ante fallos.
-- Health endpoint:
-  - `GET /v2/health` para probes de orquestacion.
-
-## 14. Variables de entorno
-- `AGENTS_OLLAMA_KEEP_ALIVE`
-  - politica de retencion de modelo en Ollama (`0s`, `5m`, etc.).
-
-- `AGENTS_OLLAMA_PREFER_GPU`
-  - `true/false`.
-
-- `NVIDIA_VISIBLE_DEVICES`
-  - soporte de deteccion/ejecucion con GPU en Docker.
-
-Nota:
-- `AGENTS_DECISION_MODEL` ya no participa en el wiring de runtime v2.
-- La seleccion de modelos de decision/evaluacion/insights viene de `GENERATION_MODELS["evaluator"]` en registry.
-
-## 15. Contratos y compatibilidad
-Estado de versionado:
-- `v1` eliminado del servicio `agents`.
-- contrato oficial actual: `v2`.
-
-Compatibilidad requerida en consumidores:
-- cualquier consumidor que apunte a `/v1/*` debe migrar a `/v2/*`.
-- para insights, usar `/v2/insights` en lugar de `/v2/completions`.
-
-## 16. Despliegue (Docker)
-- Base de imagen: `ollama/ollama:latest`.
-- Dependencias Python: `fastapi`, `uvicorn`, `ollama`, `pydantic`, etc.
+## 16. Despliegue Docker (resumen)
+- Imagen base de runtime Ollama.
 - Startup esperado:
   1. `ollama serve`
-  2. pull de modelos requeridos
-  3. `uvicorn api.app:app --host 0.0.0.0 --port 8003`
+  2. arranque API FastAPI
+  3. validación/descarga de modelos faltantes
 
-## 17. Streaming y SSE
-Implementacion actual:
-- no hay SSE publico en `agents`.
-- endpoints responden payload unico por request.
-
-`agent_core` puede usar streaming propio en su capa API, pero `agents` permanece como runtime sin SSE expuesto.
-
-## 18. Resumen ejecutivo
-- Servicio consolidado en `v2`.
-- Runtime unificado en `V2RuntimeServices` con cliente Ollama compartido.
-- Endpoints de decision/evaluacion/insights centralizados y coherentes con registry.
-- Contratos HTTP claros para `agent_core`.
-- Eliminada dependencia operativa de `v1`.
+## 17. Resumen ejecutivo
+- Servicio consolidado en v2.
+- Estándar explícito servicio-modelo para capacidades agenticas.
+- Ownership de modelos centralizado en agents.
+- Contratos HTTP alineados para integración con agent_core.

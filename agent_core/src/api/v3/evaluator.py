@@ -18,11 +18,8 @@ class Evaluator:
     - This evaluator does not choose actions and cannot override deterministic policy.
     """
 
-    def __init__(self, model_url: str | None = None, model_name: str | None = None):
+    def __init__(self, model_url: str | None = None):
         self.model_url = model_url or os.getenv("AGENTS_URL", "http://agents:8003")
-        self.model_name = model_name or os.getenv(
-            "AGENT_EVALUATOR_MODEL", "Qwen2.5-7B-Instruct-1M"
-        )
 
     def evaluate(
         self,
@@ -90,7 +87,6 @@ class Evaluator:
             "materials_count": len(state.materials_found),
             "documents_count": len(state.documents),
             "insights_count": len(state.extracted_insights),
-            "has_comparison": bool(state.properties_collected.get("comparison")),
             "has_constraint_validation": bool(
                 state.properties_collected.get("constraint_validation")
             ),
@@ -118,12 +114,7 @@ class Evaluator:
             "1) Intent coverage: infer whether the query requires comparison, filtering by constraints, aggregation, ranking, or disambiguation.\\n"
             "2) State assessment: verify current_state has required entities, complete properties, and completed transformations.\\n"
             "3) Gap analysis: compute intent minus current_state. If any critical gap exists, output verdict=insufficient and can_answer=false.\\n"
-            "Insufficient includes missing data AND missing transformations (compare/rank/aggregate), unapplied constraints, or unresolved ambiguity.\\n"
-            "Adversarial examples:\\n"
-            "Case 1 (false positive): Query='Compare density of aluminum and copper'; state has density_aluminum and density_copper only.\\n"
-            'Expected: {"verdict":"insufficient","can_answer":false,"missing_information":["comparison not performed"],"risk_if_stop":"high"}.\\n'
-            "Case 2 (truly sufficient): state has comparison_result='Copper is denser than aluminum'.\\n"
-            'Expected: {"verdict":"sufficient","can_answer":true,"risk_if_stop":"low"}.\\n'
+            "Insufficient includes missing data AND missing transformations (rank/aggregate), unapplied constraints, or unresolved ambiguity.\\n"
             "Return STRICT JSON only with keys: verdict, confidence, missing_information, risk_if_stop, can_answer, reasoning.\\n"
             "Schema constraints:\\n"
             "- verdict: 'sufficient' or 'insufficient'\\n"

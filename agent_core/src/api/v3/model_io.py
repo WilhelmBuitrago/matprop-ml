@@ -9,7 +9,7 @@ def messages_to_history(messages: Iterable[Dict[str, Any]]) -> List[Dict[str, st
     for message in messages:
         role = str(message.get("role", "")).strip()
         content = str(message.get("content", "")).strip()
-        if role in {"system", "user", "assistant"} and content:
+        if role in {"system", "user", "assistant", "tool"} and content:
             history.append({"role": role, "content": content})
     return history
 

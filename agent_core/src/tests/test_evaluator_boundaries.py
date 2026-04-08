@@ -15,8 +15,8 @@ def test_evaluator_returns_structured_suggestions_only(fake_requests_post):
         state=state,
         tool_name="query_materials_database",
         tool_output={"materials": [], "count": 0},
-        next_planned_step="compare_materials",
-        tools_available=["query_materials_database", "compare_materials"],
+        next_planned_step="validate_material_constraints",
+        tools_available=["query_materials_database", "validate_material_constraints"],
     )
 
     assert feedback.verdict in {"sufficient", "insufficient"}

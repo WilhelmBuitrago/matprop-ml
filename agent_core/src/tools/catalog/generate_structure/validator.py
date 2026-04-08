@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from pymatgen.core.periodic_table import Element
+try:  # pragma: no cover - environment-dependent optional dependency
+    from pymatgen.core.periodic_table import Element
+except Exception:  # pragma: no cover - handled at runtime
+    Element = None  # type: ignore[assignment]
 
 from .constants import DEFAULT_MIN_DISTANCE_ANGSTROM, MIN_DISTANCE_THRESHOLDS
 from .post_processor import ParsedStructure
@@ -21,6 +24,13 @@ class PyMatgenValidator:
     """Runs structural plausibility checks using pymatgen primitives."""
 
     def validate(self, parsed: ParsedStructure) -> ValidationResult:
+        if Element is None:
+            return ValidationResult(
+                is_valid=False,
+                errors=["pymatgen_not_installed"],
+                warnings=[],
+            )
+
         errors: list[str] = []
         warnings: list[str] = []
         structure = parsed.structure

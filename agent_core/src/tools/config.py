@@ -1,6 +1,5 @@
 from tools.base import ToolRegistry
 from tools.catalog import (
-    CompareMaterialsTool,
     DocumentRAGTool,
     GenerateCrystalStructureTool,
     QueryMaterialsDatabaseTool,
@@ -17,7 +16,6 @@ registration order. All policy and API layers must read tool metadata from here.
 
 TOOL_REGISTRY = ToolRegistry()
 TOOL_REGISTRY.register(QueryMaterialsDatabaseTool())
-TOOL_REGISTRY.register(CompareMaterialsTool())
 TOOL_REGISTRY.register(ValidateMaterialConstraintsTool())
 TOOL_REGISTRY.register(SearchScientificDocumentsTool())
 TOOL_REGISTRY.register(DocumentRAGTool())

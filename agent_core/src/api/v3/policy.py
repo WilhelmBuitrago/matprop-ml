@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List
 import re
 
+from .policy_engine_base import PolicyEngineBase
 from .state import AgentState
 from tools.base import ToolRegistry
 
@@ -22,7 +23,7 @@ class NoValidToolError(RuntimeError):
     """Raised when no tool passes preconditions for current state."""
 
 
-class PolicyEngine:
+class LegacyPolicyEngine(PolicyEngineBase):
     """Local deterministic policy with evaluator-guided scoring."""
 
     WEIGHTS = {
@@ -34,7 +35,6 @@ class PolicyEngine:
 
     TOOL_COST = {
         "query_materials_database": 0.35,
-        "compare_materials": 0.20,
         "validate_material_constraints": 0.25,
         "search_scientific_documents": 0.55,
         "document_rag": 0.80,
@@ -86,8 +86,9 @@ class PolicyEngine:
                 "generate_crystal_structure",
             ],
             "compare": [
-                "compare_materials",
                 "query_materials_database",
+                "validate_material_constraints",
+                "search_scientific_documents",
             ],
             "constraint_validation": [
                 "validate_material_constraints",
@@ -139,8 +140,6 @@ class PolicyEngine:
     def _expected_information_gain(self, state: AgentState, tool_name: str) -> float:
         if tool_name == "query_materials_database":
             return 0.9 if not state.materials_found else 0.2
-        if tool_name == "compare_materials":
-            return 0.8 if len(state.materials_found) >= 2 else 0.1
         if tool_name == "validate_material_constraints":
             return 0.7 if state.constraints else 0.2
         if tool_name == "search_scientific_documents":
@@ -152,8 +151,6 @@ class PolicyEngine:
         return 0.2
 
     def _state_compatibility(self, state: AgentState, tool_name: str) -> float:
-        if tool_name == "compare_materials" and len(state.materials_found) >= 2:
-            return 1.0
         if tool_name == "validate_material_constraints" and state.constraints:
             return 1.0
         if tool_name == "document_rag" and state.documents:
@@ -168,12 +165,6 @@ class PolicyEngine:
         if tool_name == "query_materials_database":
             query_mode = self._extract_material_query(state.query)
             return {**query_mode, "filters": {}, "limit": 5}
-        if tool_name == "compare_materials":
-            material_ids = [m.material_id for m in state.materials_found[:5]]
-            return {
-                "material_ids": material_ids,
-                "properties_to_compare": ["band_gap", "density", "is_stable"],
-            }
         if tool_name == "validate_material_constraints":
             return {"constraints": state.constraints}
         if tool_name == "search_scientific_documents":
@@ -212,3 +203,7 @@ class PolicyEngine:
             return {"formula": formula_match.group(1)}
 
         return {"formula": "Si"}
+
+
+class PolicyEngine(LegacyPolicyEngine):
+    """Backward-compatible alias for existing imports/tests."""

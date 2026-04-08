@@ -1,14 +1,45 @@
-"""Centralized model registry - single source of truth for all model names."""
+"""Centralized model registry resolved from environment variables."""
 
-# Embedding models (dense vectors for similarity)
-EMBEDDING_MODEL = "mxbai-embed-large"
+from __future__ import annotations
 
-# Generation models (for chat/CIF)
+import os
+
+
+def _resolve_model(name: str, default: str) -> str:
+    value = os.getenv(name, default).strip()
+    return value if value else default
+
+
+# Embeddings
+EMBEDDING_MODEL = _resolve_model("AGENT_EMBEDDING_MODEL", "mxbai-embed-large")
+
+# Generative models
+EVALUATOR_MODEL = _resolve_model(
+    "AGENT_EVALUATOR_MODEL",
+    "yasserrmd/Qwen2.5-7B-Instruct-1M",
+)
+INSIGHTS_MODEL = _resolve_model("AGENT_INSIGHTS_MODEL", EVALUATOR_MODEL)
+PLANNER_MODEL = _resolve_model("AGENT_PLANNER_MODEL", EVALUATOR_MODEL)
+FINAL_MODEL = _resolve_model(
+    "AGENT_FINAL_MODEL", "WilhelmBuitrago/llamat-3-chat-8b:Q5_K_M"
+)
+CIF_MODEL = _resolve_model("AGENT_CIF_MODEL", "WilhelmBuitrago/llamat-3-cif-8b:Q5_K_M")
+
+# Backward-compatible dictionary for existing consumers.
 GENERATION_MODELS = {
-    "evaluator": "yasserrmd/Qwen2.5-7B-Instruct-1M",
-    "final": "WilhelmBuitrago/llamat-3-chat-8b:Q5_K_M",
-    "cif": "WilhelmBuitrago/llamat-3-cif-8b:Q5_K_M",
+    "evaluator": EVALUATOR_MODEL,
+    "final": FINAL_MODEL,
+    "cif": CIF_MODEL,
 }
 
-# Consolidated list for bulk operations
-ALL_MODELS = [EMBEDDING_MODEL] + list(GENERATION_MODELS.values())
+# Pulled automatically at startup.
+ALL_MODELS = sorted(
+    {
+        EMBEDDING_MODEL,
+        EVALUATOR_MODEL,
+        INSIGHTS_MODEL,
+        PLANNER_MODEL,
+        FINAL_MODEL,
+        CIF_MODEL,
+    }
+)

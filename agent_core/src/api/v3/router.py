@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 from .scheme import CompletionRequestV3
@@ -10,10 +10,9 @@ service_v3 = CompletionServiceV3()
 
 
 @router.post("/completions")
-def chat_v3(request: CompletionRequestV3, http_request: Request):
+def chat_v3(request: CompletionRequestV3):
     """V3 endpoint with optional SSE streaming."""
-    accept_header = http_request.headers.get("accept", "").lower()
-    wants_stream = request.stream or "text/event-stream" in accept_header
+    wants_stream = request.stream
 
     if wants_stream:
         return StreamingResponse(

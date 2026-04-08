@@ -4,7 +4,8 @@ from typing import Dict, Any, List
 import os
 import time
 
-from .policy import NoValidToolError, PolicyEngine
+from .policy import NoValidToolError
+from .policy_engine_base import PolicyEngineBase
 from .evaluator import Evaluator
 from .state import (
     AgentState,
@@ -52,7 +53,7 @@ def _list_available_tools(state: AgentState, registry: ToolRegistry) -> List[str
 
 def _predict_next_planned_step(
     state: AgentState,
-    policy: PolicyEngine,
+    policy: PolicyEngineBase,
     registry: ToolRegistry,
 ) -> str:
     try:
@@ -84,9 +85,6 @@ def apply_tool_result(
             )
         if state.materials_found:
             state.properties_collected["materials_loaded"] = True
-
-    elif tool_name == "compare_materials":
-        state.properties_collected["comparison"] = payload
 
     elif tool_name == "validate_material_constraints":
         state.properties_collected["constraint_validation"] = payload
@@ -126,7 +124,7 @@ def apply_tool_result(
 
 def run_loop(
     state: AgentState,
-    policy: PolicyEngine,
+    policy: PolicyEngineBase,
     evaluator: Evaluator,
     registry: ToolRegistry,
 ) -> AgentState:

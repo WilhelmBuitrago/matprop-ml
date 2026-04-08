@@ -28,7 +28,7 @@ def test_policy_selection_is_deterministic_for_same_state():
     assert d1.tool_arguments == d2.tool_arguments
 
 
-def test_policy_prefers_compare_when_two_materials_available():
+def test_policy_handles_compare_intent_without_compare_tool():
     policy = PolicyEngine()
     state = _state("compare candidate materials")
     state.materials_found.append(
@@ -40,4 +40,8 @@ def test_policy_prefers_compare_when_two_materials_available():
 
     decision = policy.decide(state, TOOL_REGISTRY)
 
-    assert decision.tool_name == "compare_materials"
+    assert decision.tool_name in {
+        "query_materials_database",
+        "search_scientific_documents",
+        "validate_material_constraints",
+    }

@@ -76,3 +76,25 @@ class EvaluatorModelOutput(BaseModel):
     confidence: float = 0.0
     reasoning: str = ""
     missing_properties: List[str] = Field(default_factory=list)
+
+
+class PlanningStep(BaseModel):
+    tool: str
+    reason: str
+
+
+class PlannerCandidateTool(BaseModel):
+    name: str
+    score: float
+    description: str = ""
+
+
+class PlannerRequest(BaseModel):
+    query: str
+    state: Dict[str, Any] = Field(default_factory=dict)
+    candidate_tools: List[PlannerCandidateTool] = Field(default_factory=list)
+    max_steps: int = Field(default=3, ge=1, le=3)
+
+
+class PlannerResponse(BaseModel):
+    steps: List[PlanningStep] = Field(default_factory=list, max_items=3)

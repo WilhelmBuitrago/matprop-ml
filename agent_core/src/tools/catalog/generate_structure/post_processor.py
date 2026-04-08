@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
-from pymatgen.core import Structure
+try:  # pragma: no cover - environment-dependent optional dependency
+    from pymatgen.core import Structure
+except Exception:  # pragma: no cover - handled at runtime
+    Structure = None  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
@@ -19,7 +23,7 @@ class AtomSite:
 class ParsedStructure:
     lattice: dict[str, float]
     atoms: list[AtomSite]
-    structure: Structure
+    structure: Any
     errors: list[str] = field(default_factory=list)
 
 
@@ -41,6 +45,9 @@ class PostProcessor:
         return text[start:].strip()
 
     def parse(self, raw_output: str) -> ParsedStructure:
+        if Structure is None:
+            raise RuntimeError("pymatgen_not_installed")
+
         cleaned = self.clean_raw_output(raw_output)
         cif_text = self.extract_cif_block(cleaned)
         structure = Structure.from_str(cif_text, fmt="cif")

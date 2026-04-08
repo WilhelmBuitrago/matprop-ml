@@ -2,25 +2,35 @@
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any, List
 
-from models import EMBEDDING_MODEL, GENERATION_MODELS
+from models import (
+    EMBEDDING_MODEL,
+    EVALUATOR_MODEL,
+    INSIGHTS_MODEL,
+    PLANNER_MODEL,
+)
 from services import (
     ChatService,
-    CrystalSpecExtractionAgent,
     CifService,
+    CrystalSpecExtractionAgent,
     InfoService,
     LoadModelsService,
     OllamaClient,
 )
-from .models import DecisionModel, EvaluatorModel
+from .models import (
+    DecisionModel,
+    EvaluatorModel,
+    InsightsModel,
+    PlannerModel,
+)
 from .scheme import (
     DecisionModelInput,
     DecisionModelOutput,
     EvaluatorModelInput,
     EvaluatorModelOutput,
+    PlannerRequest,
 )
 
 _DEFAULT_KEEP_ALIVE = "0s"
@@ -37,7 +47,6 @@ class V2RuntimeServices:
     def __init__(self, keep_alive: str | None = None) -> None:
         self.keep_alive = keep_alive or resolve_keep_alive()
         self.ollama_client = OllamaClient(keep_alive=self.keep_alive)
-        self.evaluator_model_name = GENERATION_MODELS["evaluator"]
         self.loader = LoadModelsService(ollama_client=self.ollama_client)
         self.chat = ChatService(ollama_client=self.ollama_client)
         self.cif = CifService(ollama_client=self.ollama_client)
@@ -50,18 +59,25 @@ class V2RuntimeServices:
             client=self.ollama_client,
         )
         self.decision = DecisionService(
-            model_name=self.evaluator_model_name,
+            model_name=EVALUATOR_MODEL,
             ollama_client=self.ollama_client,
         )
         self.evaluator = EvaluatorService(
-            model_name=self.evaluator_model_name,
+            model_name=EVALUATOR_MODEL,
             ollama_client=self.ollama_client,
         )
         self.insights = InsightsService(
-            model_name=self.evaluator_model_name,
+            model_name=INSIGHTS_MODEL,
+            ollama_client=self.ollama_client,
+        )
+        self.planner = PlannerService(
+            model_name=PLANNER_MODEL,
             ollama_client=self.ollama_client,
         )
         self.info = InfoService()
+
+    def download_models(self) -> None:
+        self.loader.download_models()
 
 
 class EmbeddingsService:
@@ -109,15 +125,14 @@ class EvaluatorService:
 
 
 class InsightsService:
-    """Insights extraction service using the evaluator model family."""
+    """Insights service wrapper around the insights model."""
 
     def __init__(
         self,
         ollama_client: OllamaClient,
-        model_name: str | None = None,
+        model_name: str,
     ) -> None:
-        self._client = ollama_client
-        self._model_name = model_name or GENERATION_MODELS["evaluator"]
+        self._model = InsightsModel(model_name=model_name, ollama_client=ollama_client)
 
     def extract_insights(
         self,
@@ -129,48 +144,35 @@ class InsightsService:
         max_items: int = 4,
         max_tokens: int = 180,
     ) -> list[str]:
-        prompt = (
-            "Return strict JSON array of strings. "
-            "Each item must be a concise technical fact extracted from the chunk and relevant to the query. "
-            f"Use at most {max_items} facts.\n"
-            f"Query: {query}\n"
-            f"Title: {title}\n"
-            f"Section: {section}\n"
-            f"Page: {page}\n"
-            f"Chunk: {chunk}"
+        return self._model.call(
+            query=query,
+            title=title,
+            section=section,
+            page=page,
+            chunk=chunk,
+            max_items=max_items,
+            max_tokens=max_tokens,
         )
-        response = self._client.chat(
-            model=self._model_name,
-            messages=[{"role": "user", "content": prompt}],
-            options={"temperature": 0.1, "num_predict": max_tokens},
+
+
+class PlannerService:
+    """Planner service wrapper around the planner model."""
+
+    def __init__(self, model_name: str, ollama_client: OllamaClient) -> None:
+        self._model = PlannerModel(model_name=model_name, ollama_client=ollama_client)
+
+    def build_plan(
+        self,
+        *,
+        query: str,
+        state: dict[str, Any],
+        candidate_tools: list[dict[str, Any]],
+        max_steps: int,
+    ) -> dict[str, Any]:
+        payload = PlannerRequest(
+            query=query,
+            state=state,
+            candidate_tools=candidate_tools,
+            max_steps=max_steps,
         )
-        text = response.get("message", {}).get("content", "")
-        return self._parse_output(text)
-
-    def _parse_output(self, text: str) -> list[str]:
-        if not text:
-            return []
-
-        parsed = self._safe_json(text)
-        if isinstance(parsed, list):
-            return [str(item).strip() for item in parsed if str(item).strip()]
-        if isinstance(parsed, dict):
-            values = parsed.get("extracted_info") or parsed.get("facts") or []
-            if isinstance(values, list):
-                return [str(item).strip() for item in values if str(item).strip()]
-        return []
-
-    def _safe_json(self, text: str) -> Any:
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            start_list = text.find("[")
-            end_list = text.rfind("]")
-            if start_list >= 0 and end_list > start_list:
-                return json.loads(text[start_list : end_list + 1])
-
-            start_obj = text.find("{")
-            end_obj = text.rfind("}")
-            if start_obj >= 0 and end_obj > start_obj:
-                return json.loads(text[start_obj : end_obj + 1])
-        return []
+        return self._model.call(payload).model_dump()

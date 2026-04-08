@@ -1,6 +1,5 @@
 __all__ = [
     "QueryMaterialsDatabaseTool",
-    "CompareMaterialsTool",
     "ValidateMaterialConstraintsTool",
     "SearchScientificDocumentsTool",
     "DocumentRAGTool",
@@ -13,10 +12,6 @@ def __getattr__(name: str):
         from .query_materials import QueryMaterialsDatabaseTool
 
         return QueryMaterialsDatabaseTool
-    if name == "CompareMaterialsTool":
-        from .compare_materials import CompareMaterialsTool
-
-        return CompareMaterialsTool
     if name == "ValidateMaterialConstraintsTool":
         from .validate_material_constraints import ValidateMaterialConstraintsTool
 

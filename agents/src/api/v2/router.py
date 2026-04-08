@@ -19,6 +19,8 @@ from .scheme import (
     EvaluatorModelOutput,
     InsightRequest,
     InsightResponse,
+    PlannerRequest,
+    PlannerResponse,
 )
 from .service import V2RuntimeServices, resolve_keep_alive
 
@@ -86,7 +88,7 @@ async def lifespan(app: FastAPI):
         )
 
     runtime_services = V2RuntimeServices(keep_alive=keep_alive)
-    runtime_services.loader.download_models()
+    runtime_services.download_models()
     yield
 
 
@@ -235,3 +237,21 @@ def extract_insights(request: InsightRequest) -> InsightResponse:
     except Exception as exc:
         logger.exception("insights extraction failed")
         raise HTTPException(status_code=503, detail=f"insights_failed: {exc}") from exc
+
+
+@router.post("/planner", response_model=PlannerResponse)
+def planner(request: PlannerRequest) -> PlannerResponse:
+    if runtime_services is None:
+        raise HTTPException(status_code=503, detail="runtime_services_unavailable")
+
+    try:
+        result = runtime_services.planner.build_plan(
+            query=request.query,
+            state=request.state,
+            candidate_tools=[tool.model_dump() for tool in request.candidate_tools],
+            max_steps=request.max_steps,
+        )
+        return PlannerResponse.model_validate(result)
+    except Exception as exc:
+        logger.exception("planner failed")
+        raise HTTPException(status_code=503, detail=f"planner_failed: {exc}") from exc
