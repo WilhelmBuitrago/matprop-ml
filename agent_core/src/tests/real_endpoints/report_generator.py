@@ -91,8 +91,7 @@ class TestReport:
             lines.append("")
 
         lines.extend(self._render_tools_section())
-        lines.extend(self._render_agent_section(mode="legacy"))
-        lines.extend(self._render_agent_section(mode="planned"))
+        lines.extend(self._render_agent_section())
         lines.extend(self._render_edge_section())
         lines.extend(self._render_findings_section())
         lines.extend(self._render_metrics_section())
@@ -132,14 +131,13 @@ class TestReport:
         lines.append("")
         return lines
 
-    def _render_agent_section(self, mode: str) -> List[str]:
+    def _render_agent_section(self) -> List[str]:
         selected = [
             result
             for result in self.results
-            if str(result.metadata.get("suite", "")).strip().lower() == mode
+            if str(result.metadata.get("suite", "")).strip().lower() == "planned"
         ]
-        title = "Agente legacy mode" if mode == "legacy" else "Agente planned mode"
-        lines = [f"## {title}", ""]
+        lines = ["## Agente v4 planned mode", ""]
 
         if not selected:
             lines.append("Sin resultados para este modo en esta ejecucion.")

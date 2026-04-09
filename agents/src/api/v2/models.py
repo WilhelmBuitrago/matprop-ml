@@ -7,10 +7,9 @@ from services.ollama_client import OllamaClient
 from .scheme import (
     DecisionModelInput,
     DecisionModelOutput,
-    EvaluatorModelInput,
-    EvaluatorModelOutput,
-    PlannerRequest,
-    PlannerResponse,
+    PlanningEvaluatorOutput,
+    PlanningEvaluatorRequest,
+    PlanningStep,
 )
 
 
@@ -136,59 +135,212 @@ Output JSON schema:
 """.strip()
 
 
-class EvaluatorModel:
+class PlanningEvaluatorModel:
     def __init__(self, model_name: str, ollama_client: OllamaClient):
         self.model_name = model_name
         self.ollama_client = ollama_client
 
-    def call(self, payload: EvaluatorModelInput) -> EvaluatorModelOutput:
-        prompt = self._build_prompt(payload)
+    def call(self, payload: PlanningEvaluatorRequest) -> PlanningEvaluatorOutput:
+        if payload.mode == "plan":
+            return self._plan(payload)
+        return self._evaluate(payload)
+
+    def _plan(self, payload: PlanningEvaluatorRequest) -> PlanningEvaluatorOutput:
+        prompt = self._build_planner_prompt(payload)
         response = self.ollama_client.chat(
-            model=self.model_name,
+            model=payload.model_name or self.model_name,
             messages=[
                 {
                     "role": "system",
-                    "content": "Return only valid JSON. Do not include markdown or prose.",
+                    "content": "Return only strict JSON. Do not include markdown or prose.",
                 },
                 {"role": "user", "content": prompt},
             ],
-            options={"temperature": 0.2},
+            options={"temperature": 0.1},
         )
         raw = response.get("message", {}).get("content", "")
         data = _extract_json_dict(raw)
-        return EvaluatorModelOutput.model_validate(data)
+        steps = self._normalize_steps(data, payload)
+        return PlanningEvaluatorOutput(
+            steps=steps,
+            stop=None,
+            constraints_ok=None,
+            modify_plan=None,
+            feedback="",
+        )
 
-    def _build_prompt(self, payload: EvaluatorModelInput) -> str:
+    def _evaluate(self, payload: PlanningEvaluatorRequest) -> PlanningEvaluatorOutput:
+        prompt = self._build_evaluator_prompt(payload)
+        response = self.ollama_client.chat(
+            model=payload.model_name or self.model_name,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Return only strict JSON. Do not include markdown or prose.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            options={"temperature": 0.1},
+        )
+        raw = response.get("message", {}).get("content", "")
+        data = _extract_json_dict(raw)
+        feedback = str(data.get("feedback", "")).strip()
+        constraints_ok = bool(data.get("constraints_ok", data.get("stop", False)))
+        return PlanningEvaluatorOutput(
+            steps=[],
+            stop=bool(data.get("stop", False)),
+            constraints_ok=constraints_ok,
+            modify_plan=bool(data.get("modify_plan", False)),
+            feedback=feedback or "continue_with_current_plan",
+        )
+
+    def _build_planner_prompt(self, payload: PlanningEvaluatorRequest) -> str:
+        candidate_tools: List[Dict[str, Any]] = []
+        for item in payload.tools_available:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            if not name:
+                continue
+            candidate_tools.append(
+                {
+                    "name": name,
+                    "description": str(item.get("description", "")).strip(),
+                }
+            )
+
+        planner_input = {
+            "query": payload.query,
+            "state": payload.state,
+            "tools_available": candidate_tools,
+            "max_steps": payload.max_steps,
+        }
+
+        return (
+            "You are the planner module in a materials-agent pipeline.\n"
+            "Your job is only to create a tool-use plan.\n"
+            "Do not evaluate completion. Do not execute tools.\n"
+            "Use only tools listed in tools_available.\n"
+            "Output strict JSON with schema:\n"
+            '{"steps":[{"action":"use_tool","tool":"...","input":{},"purpose":"..."},'
+            '{"action":"respond","purpose":"..."}]}\n'
+            "Rules:\n"
+            "1) action is one of use_tool or respond.\n"
+            "2) use_tool must include a valid tool from tools_available.\n"
+            "3) steps length must be <= max_steps.\n"
+            "4) Include respond as the final action when possible.\n"
+            "INPUT:\n"
+            f"{json.dumps(planner_input, ensure_ascii=True)[:12000]}"
+        )
+
+    def _build_evaluator_prompt(self, payload: PlanningEvaluatorRequest) -> str:
         return f"""
-You are the evaluator model for a materials-agent loop.
+You are the evaluator module in a materials-agent pipeline.
 
-Evaluation rubric:
-- sufficient: response is complete, relevant to original query, and coherent.
-- insufficient: partial result, missing key fields, or not enough evidence yet.
-- recoverable_error: temporary/repairable issue (retry or alternate tool could help).
-- terminal_error: unrecoverable issue (cannot continue meaningfully).
+You ONLY evaluate execution status.
+You do not execute tools.
+You do not produce a plan.
+You do not write conversation messages.
 
-You must evaluate:
-- completeness
-- relevance to query
-- coherence of tool output
+Decide whether execution should stop or whether the plan must be regenerated.
+Return strict JSON only with keys: stop, constraints_ok, modify_plan, feedback.
 
 Input:
 query={json.dumps(payload.query, ensure_ascii=True)}
-query_intent={json.dumps(payload.query_intent, ensure_ascii=True)}
-tool_name={json.dumps(payload.tool_name, ensure_ascii=True)}
-expected_properties={json.dumps(payload.expected_properties or [], ensure_ascii=True)}
-last_tool_result={json.dumps(payload.tool_result, ensure_ascii=True)}
-accumulated_context={json.dumps(payload.accumulated_context, ensure_ascii=True)}
+history={json.dumps(payload.history, ensure_ascii=True)}
+plan={json.dumps(payload.plan, ensure_ascii=True)}
+state={json.dumps(payload.state, ensure_ascii=True)}
+execution_state={json.dumps(payload.execution_state, ensure_ascii=True)}
 
 Output JSON schema:
 {{
-  "evaluation": "sufficient|insufficient|recoverable_error|terminal_error",
-  "confidence": 0.0,
-  "reasoning": "...",
-  "missing_properties": []
+  "stop": true,
+    "constraints_ok": true,
+  "modify_plan": false,
+  "feedback": "short internal control feedback"
 }}
 """.strip()
+
+    def _normalize_steps(
+        self,
+        parsed: Dict[str, Any],
+        payload: PlanningEvaluatorRequest,
+    ) -> List[PlanningStep]:
+        raw_steps = parsed.get("steps")
+        allowed = sorted(
+            {
+                str(item.get("name", "")).strip()
+                for item in payload.tools_available
+                if isinstance(item, dict)
+            }
+        )
+
+        normalized: List[PlanningStep] = []
+        if isinstance(raw_steps, list):
+            for raw_step in raw_steps[: payload.max_steps]:
+                if not isinstance(raw_step, dict):
+                    continue
+
+                action_raw = str(raw_step.get("action", "")).strip().lower()
+                action = action_raw if action_raw in {"use_tool", "respond"} else ""
+
+                tool = str(raw_step.get("tool", "")).strip()
+                if not action:
+                    action = "use_tool" if tool else "respond"
+
+                if action == "respond":
+                    normalized.append(
+                        PlanningStep(
+                            action="respond",
+                            purpose=str(raw_step.get("purpose", "")).strip()
+                            or "Respond with available evidence",
+                        )
+                    )
+                    continue
+
+                if allowed and tool not in allowed:
+                    continue
+
+                tool_input = raw_step.get("input", raw_step.get("tool_arguments", {}))
+                if not isinstance(tool_input, dict):
+                    tool_input = {}
+
+                normalized.append(
+                    PlanningStep(
+                        action="use_tool",
+                        tool=tool,
+                        input=tool_input,
+                        purpose=str(
+                            raw_step.get("purpose", raw_step.get("reason", ""))
+                        ).strip()
+                        or f"Use {tool}",
+                    )
+                )
+
+        if not normalized:
+            if allowed:
+                normalized.append(
+                    PlanningStep(
+                        action="use_tool",
+                        tool=allowed[0],
+                        input={},
+                        purpose="Collect initial evidence",
+                    )
+                )
+            normalized.append(
+                PlanningStep(
+                    action="respond", purpose="Respond with available evidence"
+                )
+            )
+
+        if normalized[-1].action != "respond" and len(normalized) < payload.max_steps:
+            normalized.append(
+                PlanningStep(
+                    action="respond", purpose="Respond with available evidence"
+                )
+            )
+
+        return normalized[: payload.max_steps]
 
 
 class InsightsModel:
@@ -253,70 +405,3 @@ class InsightsModel:
             if isinstance(values, list):
                 return [str(item).strip() for item in values if str(item).strip()]
         return []
-
-
-class PlannerModel:
-    def __init__(self, model_name: str, ollama_client: OllamaClient):
-        self.model_name = model_name
-        self.ollama_client = ollama_client
-
-    def call(self, payload: PlannerRequest) -> PlannerResponse:
-        prompt = self._build_prompt(payload)
-        response = self.ollama_client.chat(
-            model=self.model_name,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Return strict JSON only. Do not include markdown or prose.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            options={"temperature": 0.2},
-        )
-        raw = response.get("message", {}).get("content", "")
-        parsed = _extract_json_dict(raw)
-        normalized = self._normalize_steps(parsed, payload)
-        return PlannerResponse.model_validate({"steps": normalized})
-
-    def _build_prompt(self, payload: PlannerRequest) -> str:
-        candidate_tools = [item.model_dump() for item in payload.candidate_tools]
-        model_input = {
-            "query": payload.query,
-            "state": payload.state,
-            "candidate_tools": candidate_tools,
-            "max_steps": payload.max_steps,
-        }
-        return (
-            "Plan the next tool actions for a deterministic materials-agent.\n"
-            "Hard constraints:\n"
-            "1) Use ONLY tool names from candidate_tools.\n"
-            f"2) Return at most {payload.max_steps} steps.\n"
-            "3) Preserve logical order: data retrieval before transformation/comparison.\n"
-            '4) Return pure JSON object with schema: {"steps":[{"tool":"...","reason":"..."}]}.\n'
-            "No markdown. No comments. No prose.\n"
-            "INPUT:\n"
-            f"{json.dumps(model_input, ensure_ascii=True)[:10000]}"
-        )
-
-    def _normalize_steps(
-        self,
-        parsed: Dict[str, Any],
-        payload: PlannerRequest,
-    ) -> List[Dict[str, str]]:
-        raw_steps = parsed.get("steps")
-        if not isinstance(raw_steps, list):
-            raise ValueError("Planner output missing 'steps' list")
-
-        allowed = {item.name for item in payload.candidate_tools}
-        normalized: List[Dict[str, str]] = []
-        for step in raw_steps[: payload.max_steps]:
-            if not isinstance(step, dict):
-                continue
-            tool = str(step.get("tool", "")).strip()
-            reason = str(step.get("reason", "")).strip()
-            if tool and tool in allowed:
-                normalized.append({"tool": tool, "reason": reason})
-
-        if not normalized:
-            raise ValueError("Planner returned no valid steps")
-        return normalized

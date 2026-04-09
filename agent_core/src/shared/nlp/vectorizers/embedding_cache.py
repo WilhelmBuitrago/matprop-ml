@@ -12,7 +12,10 @@ class ToolEmbeddingCache:
     """In-memory cache for tool description embeddings used in planned policy mode."""
 
     def __init__(self, embeddings_client: AgentsEmbeddingsClient | None = None):
-        base_url = os.getenv("AGENTS_SERVICE_URL", "http://agents:8000")
+        base_url = os.getenv(
+            "AGENTS_SERVICE_URL",
+            os.getenv("AGENTS_URL", "http://agents:8003"),
+        )
         self._embeddings_client = embeddings_client or AgentsEmbeddingsClient(
             base_url=base_url,
         )

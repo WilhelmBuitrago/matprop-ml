@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from api.v3.state import AgentState, BudgetState, MaterialRecord
+from api.v4.contracts import Plan
+from api.v4.state import AgentState, BudgetState, MaterialHypothesis as MaterialRecord
 from tools.catalog.query_materials.tool import QueryMaterialsDatabaseTool
 from tools.catalog.validate_material_constraints.tool import (
     ValidateMaterialConstraintsTool,
@@ -47,7 +48,7 @@ def test_validate_constraints_production_flow(caplog, tool_test_logger):
     state = AgentState(
         request_id="validate-prod",
         query="validate constraints",
-        intent="constraint_validation",
+        plan=Plan(steps=[], cursor=0, status="active"),
         budget=BudgetState(),
     )
 

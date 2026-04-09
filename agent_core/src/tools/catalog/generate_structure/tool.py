@@ -16,7 +16,7 @@ from .validator import PyMatgenValidator
 from .cif_generator import structure_to_cif, structure_to_poscar
 
 if TYPE_CHECKING:
-    from api.v3.state import AgentState
+    from api.v4.state import AgentState
 
 
 logger = logging.getLogger(__name__)

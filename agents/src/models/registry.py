@@ -14,15 +14,16 @@ def _resolve_model(name: str, default: str) -> str:
 EMBEDDING_MODEL = _resolve_model("AGENT_EMBEDDING_MODEL", "mxbai-embed-large")
 
 # Generative models
-EVALUATOR_MODEL = _resolve_model(
-    "AGENT_EVALUATOR_MODEL",
-    "yasserrmd/Qwen2.5-7B-Instruct-1M",
+AGENT_BASE_MODEL = _resolve_model("AGENT_BASE_MODEL", "deepseek-r1:8b")
+PLANNING_EVALUATOR_MODEL = _resolve_model(
+    "AGENT_PLANNING_EVALUATOR_MODEL",
+    AGENT_BASE_MODEL,
 )
-INSIGHTS_MODEL = _resolve_model("AGENT_INSIGHTS_MODEL", EVALUATOR_MODEL)
-PLANNER_MODEL = _resolve_model("AGENT_PLANNER_MODEL", EVALUATOR_MODEL)
-FINAL_MODEL = _resolve_model(
-    "AGENT_FINAL_MODEL", "WilhelmBuitrago/llamat-3-chat-8b:Q5_K_M"
-)
+# Backward-compatible aliases for existing consumers.
+EVALUATOR_MODEL = _resolve_model("AGENT_EVALUATOR_MODEL", PLANNING_EVALUATOR_MODEL)
+PLANNER_MODEL = _resolve_model("AGENT_PLANNER_MODEL", PLANNING_EVALUATOR_MODEL)
+INSIGHTS_MODEL = _resolve_model("AGENT_INSIGHTS_MODEL", AGENT_BASE_MODEL)
+FINAL_MODEL = _resolve_model("AGENT_FINAL_MODEL", AGENT_BASE_MODEL)
 CIF_MODEL = _resolve_model("AGENT_CIF_MODEL", "WilhelmBuitrago/llamat-3-cif-8b:Q5_K_M")
 
 # Backward-compatible dictionary for existing consumers.
@@ -37,6 +38,7 @@ ALL_MODELS = sorted(
     {
         EMBEDDING_MODEL,
         EVALUATOR_MODEL,
+        PLANNING_EVALUATOR_MODEL,
         INSIGHTS_MODEL,
         PLANNER_MODEL,
         FINAL_MODEL,

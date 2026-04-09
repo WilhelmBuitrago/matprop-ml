@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 
 if TYPE_CHECKING:
-    from api.v3.state import AgentState
+    from api.v4.state import AgentState
 
 
 @dataclass(frozen=True)
@@ -19,7 +19,7 @@ class ToolResult:
 
 
 class ToolContract:
-    """Base interface for all deterministic v3 tools."""
+    """Base interface for deterministic tools."""
 
     name: str = ""
     description: str = ""
@@ -86,7 +86,7 @@ class ToolRegistry:
     def _validate_against_schema(
         self, value: Any, schema: Dict[str, Any], path: str
     ) -> Tuple[bool, str]:
-        """Validate value against a strict subset of JSON Schema used by v3."""
+        """Validate value against a strict subset of JSON Schema used by tools."""
         one_of = schema.get("oneOf")
         if isinstance(one_of, list):
             valid_count = 0

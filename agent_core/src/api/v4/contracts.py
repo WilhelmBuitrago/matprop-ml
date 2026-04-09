@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field, model_validator
 
 
 PlanStatus = Literal["active", "completed", "exhausted"]
-RiskLevel = Literal["low", "medium", "high"]
 ToolStatus = Literal["success", "error"]
 
 
@@ -30,20 +29,6 @@ class Plan(BaseModel):
         return self
 
 
-class PlanChange(BaseModel):
-    action: Literal["insert", "remove", "replace"]
-    index: int = Field(ge=0)
-    step: PlanStep | None = None
-
-    @model_validator(mode="after")
-    def _validate_change_shape(self) -> "PlanChange":
-        if self.action in {"insert", "replace"} and self.step is None:
-            raise ValueError(f"action='{self.action}' requires non-null step")
-        if self.action == "remove" and self.step is not None:
-            raise ValueError("action='remove' must not include step")
-        return self
-
-
 class ToolResult(BaseModel):
     status: ToolStatus
     raw_output: dict[str, Any] = Field(default_factory=dict)
@@ -53,26 +38,6 @@ class ToolResult(BaseModel):
 
 class EvaluatorFeedback(BaseModel):
     stop: bool
+    constraints_ok: bool = False
     modify_plan: bool
-    suggested_changes: list[PlanChange] = Field(default_factory=list)
-    confidence: float = Field(default=0.0)
-    risk: RiskLevel = "medium"
-    trace: str = ""
-
-    @model_validator(mode="after")
-    def _validate_confidence(self) -> "EvaluatorFeedback":
-        if self.confidence < 0.0 or self.confidence > 1.0:
-            raise ValueError("confidence must be in [0.0, 1.0]")
-        return self
-
-
-def validate_plan_changes(
-    changes: list[PlanChange] | list[dict[str, Any]],
-) -> list[PlanChange]:
-    validated: list[PlanChange] = []
-    for item in changes:
-        if isinstance(item, PlanChange):
-            validated.append(item)
-            continue
-        validated.append(PlanChange.model_validate(item))
-    return validated
+    feedback: str = ""

@@ -9,7 +9,7 @@ from .schema import INPUT_SCHEMA, OUTPUT_SCHEMA
 from .validator import evaluate_constraints, validate_constraints
 
 if TYPE_CHECKING:
-    from api.v3.state import AgentState
+    from api.v4.state import AgentState
 
 
 logger = logging.getLogger(__name__)

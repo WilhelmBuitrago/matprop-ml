@@ -15,12 +15,10 @@ from .scheme import (
     CrystalSpecExtractionRequest,
     DecisionModelInput,
     DecisionModelOutput,
-    EvaluatorModelInput,
-    EvaluatorModelOutput,
     InsightRequest,
     InsightResponse,
-    PlannerRequest,
-    PlannerResponse,
+    PlanningEvaluatorOutput,
+    PlanningEvaluatorRequest,
 )
 from .service import V2RuntimeServices, resolve_keep_alive
 
@@ -106,17 +104,17 @@ def decision(payload: DecisionModelInput):
         ) from exc
 
 
-@router.post("/evaluate", response_model=EvaluatorModelOutput)
-def evaluate(payload: EvaluatorModelInput):
+@router.post("/planning-evaluator", response_model=PlanningEvaluatorOutput)
+def planning_evaluator(payload: PlanningEvaluatorRequest):
     if runtime_services is None:
         raise HTTPException(status_code=503, detail="runtime_services_unavailable")
     try:
-        result = runtime_services.evaluator.call(payload)
+        result = runtime_services.planning_evaluator.call(payload)
         return result
     except Exception as exc:
-        logger.exception("evaluator_model call failed")
+        logger.exception("planning_evaluator_model call failed")
         raise HTTPException(
-            status_code=503, detail=f"evaluator_model_failed: {exc}"
+            status_code=503, detail=f"planning_evaluator_failed: {exc}"
         ) from exc
 
 
@@ -237,21 +235,3 @@ def extract_insights(request: InsightRequest) -> InsightResponse:
     except Exception as exc:
         logger.exception("insights extraction failed")
         raise HTTPException(status_code=503, detail=f"insights_failed: {exc}") from exc
-
-
-@router.post("/planner", response_model=PlannerResponse)
-def planner(request: PlannerRequest) -> PlannerResponse:
-    if runtime_services is None:
-        raise HTTPException(status_code=503, detail="runtime_services_unavailable")
-
-    try:
-        result = runtime_services.planner.build_plan(
-            query=request.query,
-            state=request.state,
-            candidate_tools=[tool.model_dump() for tool in request.candidate_tools],
-            max_steps=request.max_steps,
-        )
-        return PlannerResponse.model_validate(result)
-    except Exception as exc:
-        logger.exception("planner failed")
-        raise HTTPException(status_code=503, detail=f"planner_failed: {exc}") from exc

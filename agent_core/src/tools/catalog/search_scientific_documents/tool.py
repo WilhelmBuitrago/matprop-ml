@@ -32,7 +32,7 @@ from .ranking import (
 from .schema import INPUT_SCHEMA, OUTPUT_SCHEMA
 
 if TYPE_CHECKING:
-    from api.v3.state import AgentState
+    from api.v4.state import AgentState
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,10 @@ class SearchScientificDocumentsTool(ToolContract):
         self._embeddings_client: AgentsEmbeddingsClient | None = None
         if use_embeddings:
             try:
-                agents_url = os.getenv("AGENTS_SERVICE_URL", "http://agents:8000")
+                agents_url = os.getenv(
+                    "AGENTS_SERVICE_URL",
+                    os.getenv("AGENTS_URL", "http://agents:8003"),
+                )
                 self._embeddings_client = AgentsEmbeddingsClient(base_url=agents_url)
             except Exception as e:
                 logger.warning(

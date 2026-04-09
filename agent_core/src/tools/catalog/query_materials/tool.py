@@ -13,7 +13,7 @@ from .ranking import rank_materials
 from .schema import INPUT_SCHEMA, OUTPUT_SCHEMA
 
 if TYPE_CHECKING:
-    from api.v3.state import AgentState
+    from api.v4.state import AgentState
 
 
 logger = logging.getLogger(__name__)

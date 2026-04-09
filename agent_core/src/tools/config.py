@@ -8,7 +8,7 @@ from tools.catalog import (
 )
 
 
-"""Central v3 tool catalog and strict schema registry.
+"""Central tool catalog and strict schema registry.
 
 This module is the single source of truth for tool definitions, schemas, and
 registration order. All policy and API layers must read tool metadata from here.

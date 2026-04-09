@@ -2,7 +2,8 @@ import logging
 
 import pytest
 
-from api.v3.state import AgentState, BudgetState, DocumentRecord
+from api.v4.contracts import Plan
+from api.v4.state import AgentState, BudgetState
 from tools.catalog.document_rag.errors import (
     DocumentDownloadError,
     EmbeddingError,
@@ -138,16 +139,16 @@ def _state_with_documents() -> AgentState:
     state = AgentState(
         request_id="rag-test",
         query="find evidence",
-        intent="document_search",
+        plan=Plan(steps=[], cursor=0, status="active"),
         budget=BudgetState(),
     )
     state.documents.append(
-        DocumentRecord(
-            title="Bi-based semiconductors",
-            source="semantic_scholar",
-            relevance_score=0.9,
-            abstract="summary",
-        )
+        {
+            "title": "Bi-based semiconductors",
+            "source": "semantic_scholar",
+            "relevance_score": 0.9,
+            "abstract": "summary",
+        }
     )
     return state
 
@@ -161,7 +162,7 @@ def test_preconditions_require_documents_in_state(
     empty_state = AgentState(
         request_id="rag-empty",
         query="q",
-        intent="document_search",
+        plan=Plan(steps=[], cursor=0, status="active"),
         budget=BudgetState(),
     )
     ok, reason = tool.preconditions(empty_state)

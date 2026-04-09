@@ -53,11 +53,11 @@ class AgentState:
     final_answer: str | None = None
 
     budget: BudgetState = field(default_factory=BudgetState)
-    plan_modifications_used: int = 0
+    replans_used: int = 0
 
     stop_reason: str | None = None
 
     @property
     def materials_found(self) -> list[MaterialHypothesis]:
-        # Compatibility alias for existing v3-oriented tools.
+        # Compatibility alias for existing tools expecting materials_found.
         return self.hypotheses

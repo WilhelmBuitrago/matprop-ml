@@ -2,7 +2,8 @@ import logging
 
 import pytest
 
-from api.v3.state import AgentState, BudgetState, MaterialRecord
+from api.v4.contracts import Plan
+from api.v4.state import AgentState, BudgetState, MaterialHypothesis as MaterialRecord
 from tools.catalog.validate_material_constraints.tool import (
     ValidateMaterialConstraintsTool,
 )
@@ -15,7 +16,7 @@ def _state() -> AgentState:
     return AgentState(
         request_id="constraints-tool-tests",
         query="validate",
-        intent="material_lookup",
+        plan=Plan(steps=[], cursor=0, status="active"),
         budget=BudgetState(),
     )
 

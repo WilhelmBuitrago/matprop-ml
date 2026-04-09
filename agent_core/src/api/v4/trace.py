@@ -71,7 +71,7 @@ class TraceEmitter:
             "stop_reason": self._state.stop_reason,
             "plan": self._state.plan.model_dump(),
             "budget": asdict(self._state.budget),
-            "plan_modifications_used": self._state.plan_modifications_used,
+            "replans_used": self._state.replans_used,
             "trace": [asdict(item) for item in self._state.execution_trace],
             "final_answer": self._state.final_answer,
         }

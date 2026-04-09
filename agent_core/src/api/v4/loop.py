@@ -4,11 +4,11 @@ from typing import Any
 import asyncio
 import re
 
-from .contracts import Plan, PlanChange, ToolResult
+from .contracts import ToolResult
 from .state import AgentState, MaterialHypothesis
 
 
-MAX_PLAN_MODIFICATIONS = 2
+MAX_REPLANS = 2
 
 
 def now_ms() -> int:
@@ -17,7 +17,12 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
-async def run_loop(state, registry, evaluator, emitter):
+async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
+    """Execute the plan loop.
+
+    Evaluator feedback is computed per-iteration after each successful tool
+    execution. No evaluator step is run during entry-policy tool selection.
+    """
     state.budget.ensure_started()
 
     while True:
@@ -105,16 +110,24 @@ async def run_loop(state, registry, evaluator, emitter):
 
         apply_tool_result(state, step.tool, result.structured_output)
 
-        feedback = await evaluator.evaluate(state)
+        try:
+            feedback = await evaluator.evaluate(state)
+        except Exception as exc:
+            state.stop_reason = "evaluator_failed"
+            await emitter.emit(
+                "stop",
+                {"reason": state.stop_reason, "error": str(exc)},
+                trace="Evaluator failed",
+            )
+            break
+
         await emitter.emit(
             "evaluation",
             feedback.model_dump(),
-            trace=feedback.trace,
-            confidence=feedback.confidence,
-            risk=feedback.risk,
+            trace=feedback.feedback,
         )
 
-        if feedback.stop:
+        if feedback.stop and feedback.constraints_ok:
             state.stop_reason = "sufficient_evidence"
             state.plan.status = "completed"
             await emitter.emit(
@@ -122,23 +135,38 @@ async def run_loop(state, registry, evaluator, emitter):
             )
             break
 
-        if (
-            feedback.modify_plan
-            and state.plan_modifications_used < MAX_PLAN_MODIFICATIONS
-        ):
-            new_plan = apply_plan_changes_constrained(
-                state.plan,
-                feedback.suggested_changes,
-                cursor=state.plan.cursor,
+        if feedback.modify_plan and state.replans_used < MAX_REPLANS:
+            planner_outcome = await asyncio.to_thread(
+                planner.build_plan,
+                query=state.query,
+                tool_catalog=tool_catalog,
+                history=evaluator.build_history(state),
+                state={
+                    "cursor": state.plan.cursor,
+                    "replans_used": state.replans_used,
+                },
+                feedback=feedback.feedback,
             )
-            if new_plan is not None:
-                state.plan = new_plan
-                state.plan_modifications_used += 1
+            if planner_outcome.plan is None:
+                state.stop_reason = "planner_failed"
                 await emitter.emit(
-                    "plan_modified",
-                    state.plan.model_dump(),
-                    trace="Plan actualizado por evaluador (restricciones aplicadas)",
+                    "stop",
+                    {
+                        "reason": state.stop_reason,
+                        "details": planner_outcome.fallback_reason,
+                    },
+                    trace="Planner failed during replan",
                 )
+                break
+
+            state.plan = planner_outcome.plan
+            state.replans_used += 1
+            await emitter.emit(
+                "plan_modified",
+                state.plan.model_dump(),
+                trace="Plan regenerated from evaluator feedback",
+            )
+            continue
 
         state.plan.cursor += 1
 
@@ -317,49 +345,3 @@ def apply_tool_result(
     elif tool_name == "generate_crystal_structure":
         state.constraints["structure"] = payload
         state.properties_collected["structure"] = payload
-
-
-def apply_plan_changes_constrained(
-    plan: Plan,
-    changes: list[PlanChange],
-    *,
-    cursor: int,
-) -> Plan | None:
-    updated_steps = list(plan.steps)
-    changed = False
-
-    for change in changes:
-        if change.index <= cursor:
-            continue
-
-        if change.action == "insert" and change.step is not None:
-            if change.index > len(updated_steps):
-                continue
-            updated_steps.insert(change.index, change.step)
-            changed = True
-
-        elif change.action == "remove":
-            if change.index >= len(updated_steps):
-                continue
-            updated_steps.pop(change.index)
-            changed = True
-
-        elif change.action == "replace" and change.step is not None:
-            if change.index >= len(updated_steps):
-                continue
-            updated_steps[change.index] = change.step
-            changed = True
-
-    if not changed:
-        return None
-
-    if not updated_steps:
-        return None
-
-    if cursor >= len(updated_steps):
-        return None
-
-    try:
-        return Plan(steps=updated_steps, cursor=cursor, status="active")
-    except Exception:
-        return None

@@ -7,9 +7,8 @@ from typing import Any, List
 
 from models import (
     EMBEDDING_MODEL,
-    EVALUATOR_MODEL,
     INSIGHTS_MODEL,
-    PLANNER_MODEL,
+    PLANNING_EVALUATOR_MODEL,
 )
 from services import (
     ChatService,
@@ -21,16 +20,14 @@ from services import (
 )
 from .models import (
     DecisionModel,
-    EvaluatorModel,
     InsightsModel,
-    PlannerModel,
+    PlanningEvaluatorModel,
 )
 from .scheme import (
     DecisionModelInput,
     DecisionModelOutput,
-    EvaluatorModelInput,
-    EvaluatorModelOutput,
-    PlannerRequest,
+    PlanningEvaluatorOutput,
+    PlanningEvaluatorRequest,
 )
 
 _DEFAULT_KEEP_ALIVE = "0s"
@@ -59,19 +56,15 @@ class V2RuntimeServices:
             client=self.ollama_client,
         )
         self.decision = DecisionService(
-            model_name=EVALUATOR_MODEL,
+            model_name=PLANNING_EVALUATOR_MODEL,
             ollama_client=self.ollama_client,
         )
-        self.evaluator = EvaluatorService(
-            model_name=EVALUATOR_MODEL,
+        self.planning_evaluator = PlanningEvaluatorService(
+            model_name=PLANNING_EVALUATOR_MODEL,
             ollama_client=self.ollama_client,
         )
         self.insights = InsightsService(
             model_name=INSIGHTS_MODEL,
-            ollama_client=self.ollama_client,
-        )
-        self.planner = PlannerService(
-            model_name=PLANNER_MODEL,
             ollama_client=self.ollama_client,
         )
         self.info = InfoService()
@@ -114,13 +107,16 @@ class DecisionService:
         return self._model.call(payload)
 
 
-class EvaluatorService:
-    """Evaluator service wrapper around the evaluator model."""
+class PlanningEvaluatorService:
+    """Planning/evaluation wrapper around a single model with mode-specific prompts."""
 
     def __init__(self, model_name: str, ollama_client: OllamaClient) -> None:
-        self._model = EvaluatorModel(model_name=model_name, ollama_client=ollama_client)
+        self._model = PlanningEvaluatorModel(
+            model_name=model_name,
+            ollama_client=ollama_client,
+        )
 
-    def call(self, payload: EvaluatorModelInput) -> EvaluatorModelOutput:
+    def call(self, payload: PlanningEvaluatorRequest) -> PlanningEvaluatorOutput:
         return self._model.call(payload)
 
 
@@ -153,26 +149,3 @@ class InsightsService:
             max_items=max_items,
             max_tokens=max_tokens,
         )
-
-
-class PlannerService:
-    """Planner service wrapper around the planner model."""
-
-    def __init__(self, model_name: str, ollama_client: OllamaClient) -> None:
-        self._model = PlannerModel(model_name=model_name, ollama_client=ollama_client)
-
-    def build_plan(
-        self,
-        *,
-        query: str,
-        state: dict[str, Any],
-        candidate_tools: list[dict[str, Any]],
-        max_steps: int,
-    ) -> dict[str, Any]:
-        payload = PlannerRequest(
-            query=query,
-            state=state,
-            candidate_tools=candidate_tools,
-            max_steps=max_steps,
-        )
-        return self._model.call(payload).model_dump()

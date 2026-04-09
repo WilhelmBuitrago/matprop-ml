@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class CompletionRequest(BaseModel):
@@ -60,41 +60,40 @@ class DecisionModelOutput(BaseModel):
     reasoning: str = ""
 
 
-class EvaluatorModelInput(BaseModel):
-    query: str
-    tool_name: str
-    tool_result: Dict[str, Any]
-    expected_properties: Optional[List[str]] = None
-    query_intent: str
-    accumulated_context: List[Dict[str, Any]] = Field(default_factory=list)
-
-
-class EvaluatorModelOutput(BaseModel):
-    evaluation: Literal[
-        "sufficient", "insufficient", "recoverable_error", "terminal_error"
-    ]
-    confidence: float = 0.0
-    reasoning: str = ""
-    missing_properties: List[str] = Field(default_factory=list)
-
-
 class PlanningStep(BaseModel):
-    tool: str
-    reason: str
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["use_tool", "respond"]
+    tool: Optional[str] = None
+    input: Dict[str, Any] = Field(default_factory=dict)
+    purpose: str = ""
+
+    @model_validator(mode="after")
+    def _validate_step_shape(self) -> "PlanningStep":
+        if self.action == "use_tool" and not (self.tool or "").strip():
+            raise ValueError("tool is required when action='use_tool'")
+        return self
 
 
-class PlannerCandidateTool(BaseModel):
-    name: str
-    score: float
-    description: str = ""
+class PlanningEvaluatorRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-
-class PlannerRequest(BaseModel):
+    mode: Literal["plan", "evaluate"]
     query: str
+    model_name: Optional[str] = None
+    history: List[Dict[str, Any]] = Field(default_factory=list)
+    tools_available: List[Dict[str, Any]] = Field(default_factory=list)
     state: Dict[str, Any] = Field(default_factory=dict)
-    candidate_tools: List[PlannerCandidateTool] = Field(default_factory=list)
-    max_steps: int = Field(default=3, ge=1, le=3)
+    plan: Dict[str, Any] = Field(default_factory=dict)
+    execution_state: Dict[str, Any] = Field(default_factory=dict)
+    max_steps: int = Field(default=4, ge=1, le=8)
 
 
-class PlannerResponse(BaseModel):
-    steps: List[PlanningStep] = Field(default_factory=list, max_items=3)
+class PlanningEvaluatorOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    steps: List[PlanningStep] = Field(default_factory=list, max_items=8)
+    stop: Optional[bool] = None
+    constraints_ok: Optional[bool] = None
+    modify_plan: Optional[bool] = None
+    feedback: str = ""

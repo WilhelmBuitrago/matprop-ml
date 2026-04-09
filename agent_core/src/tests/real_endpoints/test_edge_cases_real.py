@@ -16,7 +16,7 @@ def _post_raw(
     timeout_seconds: int,
 ) -> requests.Response:
     return requests.post(
-        f"{base_url}/v3/completions",
+        f"{base_url}/v4/completions",
         json=payload,
         headers={"Content-Type": "application/json"},
         timeout=timeout_seconds,
@@ -141,46 +141,3 @@ def test_missing_api_keys(
     assert result.status == "error"
     assert result.error_code in {"VALIDATION_ERROR", "API_ERROR"}
     report_extra(observed=f"status={result.status} error_code={result.error_code}")
-
-
-def test_policy_engine_switching(
-    require_real_services,
-    real_runtime_config,
-    test_request_builder,
-    report_extra,
-):
-    report_extra(
-        suite="edge",
-        case_name="policy_engine_switching",
-        expected="legacy and planned endpoints return different policy modes",
-    )
-
-    legacy_url = os.getenv("REAL_AGENT_CORE_URL_LEGACY", "").strip()
-    planned_url = os.getenv("REAL_AGENT_CORE_URL_PLANNED", "").strip()
-    if not legacy_url or not planned_url:
-        pytest.skip(
-            "Set REAL_AGENT_CORE_URL_LEGACY and REAL_AGENT_CORE_URL_PLANNED to validate runtime mode switching."
-        )
-
-    payload = test_request_builder(query="Find mp-149").model_dump()
-
-    legacy_resp = _post_raw(
-        legacy_url.rstrip("/"),
-        payload,
-        timeout_seconds=real_runtime_config.request_timeout_seconds,
-    )
-    planned_resp = _post_raw(
-        planned_url.rstrip("/"),
-        payload,
-        timeout_seconds=real_runtime_config.request_timeout_seconds,
-    )
-
-    assert legacy_resp.status_code == 200
-    assert planned_resp.status_code == 200
-
-    legacy_mode = (legacy_resp.json().get("metadata") or {}).get("policy_mode")
-    planned_mode = (planned_resp.json().get("metadata") or {}).get("policy_mode")
-
-    assert legacy_mode == "legacy"
-    assert planned_mode == "planned"
-    report_extra(observed=f"legacy={legacy_mode} planned={planned_mode}")

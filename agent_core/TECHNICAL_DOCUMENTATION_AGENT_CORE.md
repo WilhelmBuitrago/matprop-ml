@@ -1,392 +1,431 @@
-# Agent Core - Documentación Técnica
+# Agent Core - Documentacion Tecnica Determinista (Runtime v4)
 
-Documento técnico de referencia para implementación, operación y troubleshooting de `agent_core`.
+## 1. Alcance y fuente de verdad
+Este documento especifica el comportamiento operativo actual de `agent_core` v4 sin agregar features.
 
----
+Fuente de verdad implementada:
+- `src/api/v4/service.py`
+- `src/api/v4/loop.py`
+- `src/api/v4/planner.py`
+- `src/api/v4/evaluator.py`
+- `src/api/v4/state.py`
+- `src/api/v4/contracts.py`
+- `src/tools/base.py`
 
-## 1. Alcance
+Superficie publica vigente:
+- `POST /v4/completions`
 
-Este documento describe la implementación actual de `agent_core`:
-- arquitectura híbrida con runtime `legacy` (v3) y runtime `planned` (v4),
-- modos de ejecución `legacy` y `planned`,
-- contratos internos críticos (policy/evaluator/loop/state),
-- integración HTTP con `agents` (`/v2/*`),
-- variables de entorno y ownership de modelos.
+## 2. Definicion formal de execution_state
 
-`DOCUMENTATION_AGENT_CORE.md` se mantiene como versión general/ejecutiva.
+### 2.1 Concepto
+`execution_state` es un objeto JSON enviado por `agent_core` a `/v2/planning-evaluator` para control interno del ciclo (planeacion/evaluacion). No persiste como clase propia dentro de `agent_core`; se construye por llamada.
 
----
+### 2.2 Estructura JSON por modo
 
-## 2. Arquitectura actual (visión técnica)
+#### 2.2.1 Modo `plan` (plan inicial)
+Usado por `DeepSeekOneShotPlanner.build_plan(...)`.
 
-Componentes principales:
-- `CompletionServiceV3` (`src/api/v3/service.py`): orquestación request->loop->respuesta final.
-- runtime legacy:
-  - `run_loop` (`src/api/v3/loop.py`): ciclo determinístico de ejecución.
-  - `LegacyPolicyEngine` (`src/api/v3/policy.py`)
-  - `Evaluator` (`src/api/v3/evaluator.py`): señal de suficiencia para stop gating.
-- runtime planned:
-  - `PlannedRuntimeV4` (`src/api/v4/service.py`)
-  - `DeepSeekOneShotPlanner` (`src/api/v4/planner.py`)
-  - `run_loop` (`src/api/v4/loop.py`)
-  - `LoopEvaluatorV4` (`src/api/v4/evaluator.py`)
-  - `TraceEmitter` (`src/api/v4/trace.py`)
-- `ToolRegistry` (`src/tools/config.py`, `src/tools/base.py`): precondiciones + validación de contratos.
-- `ContextBuilder` (`src/api/v3/context_builder.py`): consolidación final de evidencia para legacy.
+```json
+{
+   "feedback": ""
+}
+```
 
-Invariante:
-- Existe una sola API pública (`POST /v3/completions`) y dos rutas internas de ejecución.
-- `legacy` y `planned` usan loops distintos (v3 y v4, respectivamente).
+Reglas:
+- Campo obligatorio en payload de `agent_core`: `feedback` (string).
+- Inicializacion en plan inicial: `""`.
+- En replan: contiene feedback textual del evaluator.
 
----
+#### 2.2.2 Modo `evaluate`
+Usado por `LoopEvaluatorV4.evaluate(...)`.
 
-## 3. Contrato de entrada/salida del endpoint
+```json
+{
+   "iterations_used": 1,
+   "tool_calls_used": 1,
+   "replans_used": 0
+}
+```
 
-### 3.1 Request (`CompletionRequestV3`)
-Archivo: `src/api/v3/scheme.py`
+Reglas:
+- Campos obligatorios: `iterations_used`, `tool_calls_used`, `replans_used` (int).
+- No se envian otros campos desde `agent_core`.
 
-Campos:
-- `query: str`
-- `stream: bool = false`
-- `temperature: float = 0.2`
-- `max_tokens_for_response: int = 512`
-- `max_iterations: int = 8` (`1..32`)
-- `max_tool_calls: int = 8` (`1..32`)
-- `max_context_tokens: int = 2048` (`256..8192`)
-- `max_wall_time_ms: int = 30000` (`1000..120000`)
+### 2.3 Inicializacion y actualizacion por iteracion
+Inicializacion en runtime:
+- `iterations_used = 0`
+- `tool_calls_used = 0`
+- `replans_used = 0`
 
-Nota de consistencia:
-- `CompletionRequestV3` define el default contractual de `max_wall_time_ms=30000`.
-- `BudgetState` mantiene `max_wall_time_ms=80000` como default interno de dataclass, pero en el flujo normal queda sobreescrito por el request al construir el estado en `CompletionServiceV3`.
+Actualizacion en loop (`run_loop`):
+1. Antes de ejecutar cada step del plan: `iterations_used += 1`.
+2. Despues de invocar `_execute_tool(...)`: `tool_calls_used += 1`.
+3. Si `modify_plan == true` y replan exitoso: `replans_used += 1`.
+4. Limite de replans: `MAX_REPLANS = 2`.
 
-### 3.2 Response (`CompletionResponseV3`)
-Campos:
-- `id`
-- `object = "text_completion"`
-- `choices`
-- `usage`
-- `metadata`
+### 2.4 Diferencia explicita vs `history` y vs `state`
+- `execution_state`: contadores de control del loop y feedback de replan.
+- `history`: secuencia conversacional/operativa serializada por roles (`system`, `user`, `assistant`, `tool`).
+- `state` (payload externo): snapshot estructurado de alto nivel para evaluator/planner.
+   Ejemplo en evaluator: `materials_count`, `documents_count`, `insights_count`, `plan_cursor`, `plan_steps`, `stop_reason`.
 
-En modo streaming (`stream=true`), `CompletionServiceV3.stream_chat_events()` emite eventos SSE: `start`, `loop_done`, `final`.
+### 2.5 Ejemplo realista
+Payload enviado a `/v2/planning-evaluator` en modo `evaluate` tras 2 iteraciones y 1 replan:
 
-Nota:
-- Los eventos anteriores aplican al modo `legacy`.
-- En modo `planned`, el stream incluye eventos del `TraceEmitter`: `tool_start`, `tool_result`, `evaluation`, `plan_modified` (opcional), `stop`, además de `start` y `final`.
+```json
+{
+   "mode": "evaluate",
+   "query": "Find stable semiconductor candidates with band gap around 1 eV",
+   "history": [
+      {"role": "system", "content": "You are an external evaluator controller. You are not a conversational actor and must not produce user-facing answers."},
+      {"role": "user", "content": "Find stable semiconductor candidates with band gap around 1 eV"},
+      {"role": "assistant", "content": "{\"plan\":{\"steps\":[{\"tool\":\"query_materials_database\",\"target\":\"Si\",\"purpose\":\"Collect evidence\"}],\"cursor\":0,\"status\":\"active\"}}"},
+      {"role": "assistant", "content": "{\"action\":\"use_tool\",\"tool_call\":{\"tool\":\"query_materials_database\",\"target\":\"Si\",\"purpose\":\"Collect evidence\"}}"},
+      {"role": "tool", "content": "{\"tool_result\":{\"status\":\"success\",\"structured_output\":{\"materials\":[{\"material_id\":\"mp-149\",\"formula\":\"Si\"}]}}}"}
+   ],
+   "state": {
+      "materials_count": 1,
+      "documents_count": 0,
+      "insights_count": 0,
+      "plan_cursor": 0,
+      "plan_steps": 1,
+      "stop_reason": null
+   },
+   "plan": {
+      "steps": [{"tool": "query_materials_database", "target": "Si", "purpose": "Collect evidence"}],
+      "cursor": 0,
+      "status": "active"
+   },
+   "execution_state": {
+      "iterations_used": 2,
+      "tool_calls_used": 2,
+      "replans_used": 1
+   },
+   "max_steps": 1
+}
+```
 
----
+## 3. Definicion precisa de constraints_ok
 
-## 4. Policy engines
+### 3.1 Significado operativo
+`constraints_ok` indica si, segun evaluator, las restricciones necesarias para cerrar el loop ya se cumplen.
 
-## 4.1 Interfaz base
-Archivo: `src/api/v3/policy_engine_base.py`
+Regla de stop efectiva en `agent_core`:
 
-Contrato:
-- `classify_intent(query: str) -> str`
-- `decide(state: AgentState, registry: ToolRegistry) -> PolicyDecision`
+```text
+stop efectivo = feedback.stop == true AND feedback.constraints_ok == true
+```
 
-`PolicyDecision` (en `policy.py`):
-- `tool_name: str`
-- `tool_arguments: Dict[str, Any]`
-- `scores: Dict[str, float]`
-- `reasoning: str`
+Si `stop=true` y `constraints_ok=false`, el loop no se detiene por suficiencia.
 
-## 4.2 Selección de engine
-Archivo: `src/api/v3/policy_factory.py`
+### 3.2 Quién lo evalua
+- Planner: no evalua `constraints_ok`.
+- Evaluator (`/v2/planning-evaluator` con `mode="evaluate"`): unica fuente de `constraints_ok`.
 
-Regla:
-- Actualmente `create_policy_engine(...)` retorna `LegacyPolicyEngine` siempre.
-- El modo `planned` no se resuelve en `policy_factory`; se ejecuta por ruta dedicada en `CompletionServiceV3` (`_chat_planned` / `_stream_planned`) hacia runtime v4.
+### 3.3 Tipos de constraints (hard/soft)
+En runtime v4 no existe tipado formal hard/soft dentro de `agent_core`.
 
-## 4.3 LegacyPolicyEngine
-Archivo: `src/api/v3/policy.py`
+Implicacion:
+- Cualquier taxonomia interna del evaluator debe colapsarse a un booleano final `constraints_ok`.
+- `agent_core` no distingue ni pondera tipos de constraint; solo consume el booleano.
 
-Flujo de decisión legacy:
-1. `classify_intent` por heurística keyword.
-2. `_intent_candidates(intent)` mapea intención a candidatos iniciales.
-3. filtro por `registry.can_run(name, state)`.
-4. score determinístico por combinación de:
-   - missing coverage,
-   - information gain,
-   - state compatibility,
-   - costo de herramienta.
-5. selección por `argmax`.
-6. construcción determinística de argumentos (`_build_arguments`).
+### 3.4 Ejemplos concretos
+- `constraints_ok=true`: evidencia suficiente y consistente para responder.
+- `constraints_ok=false`: faltan validaciones o evidencia para restricciones solicitadas.
 
-Pesos actuales (`WEIGHTS`):
-- `missing_coverage = 0.45`
-- `information_gain = 0.30`
-- `compatibility = 0.20`
-- `cost = 0.15`
+### 3.5 Que ocurre cuando es false
+- Nunca activa stop por suficiencia, aun si `stop=true`.
+- El loop continua: replan si `modify_plan=true` y hay cupo; de lo contrario avanza cursor del plan.
 
-Costos por herramienta (`TOOL_COST`) definidos en código para:
-- `query_materials_database`
-- `validate_material_constraints`
-- `search_scientific_documents`
-- `document_rag`
-- `generate_crystal_structure`
+## 4. Especificacion de uso de history
 
-## 4.4 Planned Runtime v4
-Archivos: `src/api/v4/*` + integración en `src/api/v3/service.py`
+### 4.1 Roles exactos admitidos
+Roles validos en historia enviada a modelos externos:
+- `system`
+- `user`
+- `assistant`
+- `tool`
 
-Objetivo:
-- Ejecutar modo `planned` con planner one-shot, validación local y loop tool-centric asincrónico.
+No se usa rol `evaluator`.
 
-Pipeline planned actual:
-1. Construye catálogo de tools desde `ToolRegistry.as_schema_catalog()`.
-2. Llama planner one-shot (`DeepSeekOneShotPlanner`) vía `POST /v2/completions` con prompt JSON estricto.
-3. Valida localmente: parseo JSON, filtrado de tools inexistentes, coherencia mínima de plan.
-4. Si el plan es inválido o vacío tras filtrado: fallback inmediato a `LegacyPolicyEngine`.
-5. Ejecuta loop v4 (`run_loop`) con guards de presupuesto y cursor de plan.
-6. Evaluador v4 emite `EvaluatorFeedback` estructurado y opcionalmente sugiere cambios (`PlanChange`).
-7. Cambios de plan se aplican con restricciones: máximo 2 modificaciones, solo después del cursor.
-8. Se persiste traza en disco en cada evento; SSE solo cuando `stream=true`.
+### 4.2 Subconjunto que recibe cada componente
 
----
+#### 4.2.1 Planner (plan inicial)
+- `history=[]`.
+- No recibe historial conversacional previo.
 
-## 5. Ranking semántico de herramientas (estado de implementación)
+#### 4.2.2 Planner (replan)
+- Recibe `history` construido por `LoopEvaluatorV4.build_history(state)`.
+- Contenido exacto:
+   1. `system`: mensaje de control del evaluator.
+   2. `user`: `state.query`.
+   3. `assistant`: plan actual serializado.
+   4. Para cada `tool_start`: `assistant` con `{"action":"use_tool","tool_call":...}`.
+   5. Para cada `tool_result`: `tool` con `{"tool_result":...}`.
 
-Archivo: `src/shared/nlp/vectorizers/embedding_cache.py`
+#### 4.2.3 Evaluator
+- Recibe exactamente el mismo formato producido por `build_history(state)`.
 
-`ToolEmbeddingCache` existe e implementa ranking por embeddings de descripciones de tools.
+### 4.3 Estrategia de truncamiento
+No existe truncamiento de `history` en v4.
 
-Estado actual:
-- No está conectado al flujo principal del runtime `planned` (`src/api/v4/*`).
-- Su uso activo hoy es como componente disponible para futuras extensiones, no como paso obligatorio del planificador v4.
+Efecto:
+- Se incluye toda la traza de eventos `tool_start` y `tool_result` acumulada en `state.execution_trace`.
 
----
+### 4.4 Justificacion de diseno
+- Evaluator y replan requieren contexto operativo de ejecucion (no solo chat) para decidir `stop`/`modify_plan`.
+- Se omiten eventos no tool (`evaluation`, `stop`, `final`, etc.) para reducir ruido y evitar retroalimentacion circular.
 
-## 6. Planner (integración con agents) y validación local
+## 5. Flujo de replanificacion (modify_plan)
 
-## 6.1 Planner client
-Archivo: `src/api/v4/planner.py`
+### 5.1 Trigger
+Se activa replan cuando:
+- `feedback.modify_plan == true`
+- `state.replans_used < 2`
 
-Clase: `DeepSeekOneShotPlanner`
+### 5.2 Feedback enviado al planner
+En replan, `agent_core` envia solo:
+- `feedback`: texto libre `feedback.feedback`
 
-Contrato de request hacia `agents`:
-- endpoint: `{AGENTS_URL}/v2/completions`
-- payload:
-  - `history` (mensajes con prompt planner)
-  - `model_name`
-  - `temperature`
-  - `max_tokens`
+Se inyecta en payload como:
 
-Comportamiento:
-- ejecución one-shot (sin retry externo).
-- parseo JSON robusto (objeto directo o bloque incrustado).
-- normalización a `PlanStep(tool, target, purpose)`.
-- fallback a legacy en `planner_request_failed`, `planner_invalid_json`, `planner_empty_after_filter`, `planner_incoherent`.
+```json
+"execution_state": {
+   "feedback": "<feedback textual del evaluator>"
+}
+```
 
-Nota:
-- Existe un cliente legacy `QwenPlanner` en `src/api/v3/planner.py` que consume `/v2/planner`, pero no participa del flujo principal actual.
+### 5.3 Que se excluye explicitamente
+No se envia al planner en `execution_state` de replan:
+- `stop`
+- `constraints_ok`
+- `modify_plan`
+- metadatos de score/confianza del evaluator (no existen en contrato consumido)
 
----
+### 5.4 Prevencion de leakage/ruido
+- El planner recibe historial operativo filtrado (solo eventos de tools) y feedback textual corto.
+- No recibe eventos `evaluation` previos ni respuesta final al usuario.
 
-## 7. Evaluador en v3
+### 5.5 Limite de replans e impacto en estado
+- Limite fijo: `MAX_REPLANS = 2`.
+- Si se alcanza el limite:
+   - se ignora `modify_plan=true` posterior,
+   - el loop continua con `state.plan.cursor += 1` sobre el plan vigente.
+- Cada replan exitoso:
+   - reemplaza `state.plan` completo,
+   - incrementa `state.replans_used`.
 
-Archivo: `src/api/v3/evaluator.py`
+## 6. Especificacion de ejecucion de tools
 
-Rol:
-- evaluar suficiencia de evidencia para decidir parada temprana.
-- no selecciona herramienta, no modifica pesos, no ejecuta acciones.
+### 6.1 Formato de entrada a tools
+Cada step del plan tiene:
 
-Llamada remota:
-- endpoint: `{AGENTS_URL}/v2/completions`
-- payload: `history`, `temperature=0.1`, `max_tokens=300`
+```json
+{
+   "tool": "<tool_name>",
+   "target": "<optional>",
+   "purpose": "<non-empty>"
+}
+```
 
-Contrato interno normalizado (`EvaluatorFeedback` en `state.py`):
-- `verdict: "sufficient" | "insufficient"`
-- `confidence: float [0,1]`
-- `missing_information: List[str]`
-- `risk_if_stop: "low" | "medium" | "high"`
-- `can_answer: bool`
-- `reasoning: str`
+`agent_core` transforma `tool+target+state` en argumentos de ejecucion por `_build_tool_arguments(...)`.
 
-Fallback local en error:
-- `verdict="insufficient"`
-- `confidence=0.4`
-- `missing_information=["additional_evidence"]`
-- `risk_if_stop="high"`
-- `can_answer=false`
-- `reasoning="fallback_evaluation"`
+Ejemplos:
+- `query_materials_database`: `{"material_id": "mp-149", "filters": {}, "limit": 5}` o `{"formula": "Si", ...}`.
+- `validate_material_constraints`: `{"constraints": ...}`.
+- `search_scientific_documents`: `{"query": state.query, "material_focus": ..., "max_results": 5}`.
 
----
+Validacion previa:
+- `ToolRegistry.validate_input(tool_name, arguments)` contra `input_schema`.
 
-## 8. Stop gating determinístico
+### 6.2 Formato de salida de tools
+Contrato normalizado interno en loop:
 
-Archivo: `src/api/v3/loop.py`
+```json
+{
+   "status": "success|error",
+   "raw_output": {},
+   "structured_output": {},
+   "error_message": "...|null"
+}
+```
 
-Threshold configurable:
-- `AGENT_EVALUATOR_STOP_TAU`
-- default técnico: `0.75`
-- clamp a `[0.0, 1.0]`
+La salida nativa de herramienta (`tools.base.ToolResult`) se convierte a este contrato.
 
-Alcance:
-- Este gating aplica al loop `legacy` v3.
-- En modo `planned` v4, la decisión de parada depende de `LoopEvaluatorV4` (`feedback.stop`) y guards de presupuesto/plan.
+Validacion posterior:
+- `ToolRegistry.validate_output(tool_name, payload)` contra `output_schema`.
 
-Regla `should_stop(feedback, tau)`:
-- `feedback.can_answer == true`
-- `feedback.verdict == "sufficient"`
-- `feedback.confidence >= tau`
-- `feedback.risk_if_stop != "high"`
+### 6.3 Serializacion en history (rol tool)
+- `tool_start` se serializa como `assistant`:
 
-Si cumple -> `stop_reason="sufficient_evidence"`.
+```json
+{"action": "use_tool", "tool_call": {...}}
+```
 
----
+- `tool_result` se serializa como `tool`:
 
-## 9. run_loop: orden exacto de ejecución
+```json
+{"tool_result": {...}}
+```
 
-Archivo: `src/api/v3/loop.py`
+### 6.4 Efecto sobre execution_state
+- Cada invocacion de `_execute_tool(...)` incrementa `tool_calls_used`.
+- Cada paso de loop incrementa `iterations_used`.
+- Replan exitoso incrementa `replans_used`.
 
-Por iteración:
-1. Verifica `state.can_continue()` (límites y estado de ejecución).
-2. Incrementa `iterations_used`.
-3. Solicita `policy.decide(...)`.
-4. Stall detection:
-   - si misma tool consecutiva, incrementa `stall_counter`
-   - si `stall_counter >= 2` -> `stop_reason="stall_detected"`.
-5. Valida input (`registry.validate_input`).
-6. Ejecuta herramienta (`tool.execute(..., agent_state=state)`).
-7. Si `result.status != success` -> stop por error de herramienta.
-8. Valida output (`registry.validate_output`).
-9. Registra `ToolExecutionRecord` y actualiza `tool_calls_used`.
-10. Aplica `apply_tool_result` sobre estado.
-11. Calcula `tools_available` + `next_planned_step` (predicción determinística).
-12. Ejecuta `evaluator.evaluate(...)`.
-13. Registra trayectorias de confianza/riesgo.
-14. Evalúa `should_stop`.
-15. Actualiza `context_tokens_used` con estimación aproximada de evidencia iterativa.
+### 6.5 Manejo de errores de tools
+Errores manejados por `agent_core`:
+- Input invalido por schema -> `status=error`.
+- Excepcion de ejecucion (incluye timeouts internos de la herramienta, si la herramienta los lanza) -> `status=error`.
+- Salida invalida por schema -> `status=error`.
+- Tool reporta `status != success` -> `status=error`.
 
-Término por presupuesto:
-- `max_iterations`
-- `max_tool_calls`
-- `max_context_tokens`
-- `max_wall_time_ms`
+Comportamiento del loop ante error:
+- `state.stop_reason = "tool_execution_failed"`
+- emision de evento `stop`
+- terminacion inmediata del loop.
 
-Otros stop reasons relevantes:
-- `no_valid_tools_available`
-- `stall_detected`
-- `tool_input_validation_failed`
-- `tool_output_validation_failed`
-- `tool_execution_failed` o error code específico de herramienta
+Nota operativa:
+- `agent_core` no aplica timeout externo global por tool call en `run_loop`; depende del comportamiento de la herramienta.
+
+## 7. Contrato interno asumido de /v2/planning-evaluator (subset consumido)
+
+No redefine el contrato completo; documenta solo lo que `agent_core` usa.
+
+### 7.1 Campos consumidos obligatoriamente
+- `plan` (semantica de salida de plan): consumido como lista de `steps` y convertido a `Plan` interno.
+- `stop` (modo evaluate).
+- `constraints_ok` (modo evaluate; fallback a `stop` si no viene).
+- `modify_plan` (modo evaluate).
+
+### 7.2 Suposiciones criticas
+- Estructura JSON parseable y tipo objeto.
+- Coherencia minima de pasos: tools validos y secuencia coherente (validada por `is_plan_coherent`).
+- Determinismo parcial esperado: mismas entradas tienden a producir señales de control compatibles, pero no se asume determinismo estricto del modelo.
+- Si falta `constraints_ok`, se asume `bool(stop)` por fallback defensivo.
+
+## 8. Separacion de responsabilidades
+
+### 8.1 history (contexto conversacional/operativo)
+- Formato de mensajes por rol para consumo de modelos.
+- Incluye query, plan serializado y eventos de herramientas.
+- No es fuente de verdad estructural del runtime.
+
+### 8.2 execution_state (control del proceso)
+- Contadores y feedback puntual para plan/evaluate.
+- Enfocado en gobernanza de loop, no en contenido cientifico.
+
+### 8.3 state (snapshot estructurado)
+- Resumen estructurado de estado del agente para evaluator/planner.
+- En evaluator: conteos y posicion de plan.
+- En planner inicial: contexto de entry policy.
+
+### 8.4 Anti-patrones (NO hacer)
+- No usar `history` como datastore de estado estructurado persistente.
+- No inferir stop solo con `stop=true`; siempre requiere `constraints_ok=true`.
+- No enviar eventos `evaluation` al planner para replan (introduce bucle de ruido).
+- No mezclar metadata de respuesta final de usuario dentro de `execution_state`.
+
+## 9. Ejemplo end-to-end completo del loop
+
+Escenario: consulta de semiconductor estable.
+
+### 9.1 Query de entrada
+
+```json
+{
+   "query": "Busca un semiconductor estable con band gap cercano a 1 eV"
+}
+```
+
+### 9.2 Plan inicial (mode=plan)
+Respuesta del servicio planning-evaluator (subset util):
+
+```json
+{
+   "steps": [
+      {
+         "action": "use_tool",
+         "tool": "query_materials_database",
+         "input": {"formula": "Si"},
+         "purpose": "Recolectar candidatos estables"
+      },
+      {
+         "action": "use_tool",
+         "tool": "validate_material_constraints",
+         "input": {},
+         "purpose": "Verificar restricciones solicitadas"
+      },
+      {
+         "action": "respond",
+         "purpose": "Responder con evidencia"
+      }
+   ]
+}
+```
+
+`agent_core` normaliza a `PlanStep` y descarta `respond` para ejecucion de tools.
+
+### 9.3 Iteracion 1: tool execution
+- Ejecuta `query_materials_database`.
+- `tool_result.status=success`.
+- `apply_tool_result(...)` actualiza `state.hypotheses` y `state.properties_collected`.
+
+### 9.4 Evaluacion 1 (mode=evaluate)
+Respuesta evaluator:
+
+```json
+{
+   "stop": false,
+   "constraints_ok": false,
+   "modify_plan": true,
+   "feedback": "falta validar restricciones del usuario"
+}
+```
+
+Accion en loop:
+- No stop (constraints no satisfechas).
+- Como `modify_plan=true` y `replans_used<2`, se ejecuta replan.
+
+### 9.5 Replan
+Planner recibe:
+- `history` operativo filtrado,
+- `state` minimo (`cursor`, `replans_used`),
+- `execution_state.feedback` con texto del evaluator.
+
+Genera plan actualizado; `state.plan` se reemplaza y `replans_used += 1`.
+
+### 9.6 Iteracion 2: tool execution
+- Ejecuta `validate_material_constraints`.
+- `apply_tool_result(...)` escribe `state.constraints["constraint_validation"]`.
+
+### 9.7 Evaluacion 2 y stop
+Respuesta evaluator:
+
+```json
+{
+   "stop": true,
+   "constraints_ok": true,
+   "modify_plan": false,
+   "feedback": "evidencia suficiente"
+}
+```
+
+Accion final:
+- `state.stop_reason = "sufficient_evidence"`
+- `state.plan.status = "completed"`
+- termina loop.
+
+## 10. Referencia de stop reasons actuales
+Valores observables en runtime v4:
 - `sufficient_evidence`
-- `budget_exhausted` (fallback final)
+- `budget_exhausted`
+- `plan_exhausted`
+- `precondition_failed`
+- `tool_execution_failed`
+- `evaluator_failed`
+- `planner_failed`
 
----
-
-## 10. AgentState y estructuras
-
-Archivo: `src/api/v3/state.py`
-
-`AgentState` contiene:
-- identidad request (`request_id`, `query`, `intent`)
-- presupuesto (`BudgetState`)
-- evidencia acumulada:
-  - `materials_found`
-  - `documents`
-  - `extracted_insights`
-  - `constraints`
-  - `properties_collected`
-- trazabilidad:
-  - `tool_calls`
-  - `policy_trace`
-  - `evaluator_feedback`
-  - `confidence_trajectory`
-  - `risk_trajectory`
-  - `evaluation_trace`
-- control de ejecución:
-  - `execution_status`
-  - `stop_reason`
-  - `stall_counter`
-  - `started_at_ms`
-  - `final_answer`
-
-`BudgetState` defaults en código:
-- `max_iterations=8`
-- `max_tool_calls=8`
-- `max_context_tokens=2048`
-- `max_wall_time_ms=80000`
-
-Nota:
-- en flujo normal, `CompletionRequestV3` sobreescribe estos límites con sus propios defaults/inputs.
-
----
-
-## 11. Integración con agents y ownership de modelos
-
-Regla de arquitectura:
-- `agent_core` no decide modelos LLM específicos.
-- selección de modelos se centraliza en servicio `agents` (`src/models/registry.py`).
-
-`agent_core` consume capacidades por contrato HTTP:
-- `POST {AGENTS_URL}/v2/completions` (final answer + evaluator backend)
-- `POST {AGENTS_URL}/v2/insights` (document_rag extractor)
-- `POST {AGENTS_SERVICE_URL}/v2/embeddings` (scoring semántico y retrieval)
-
-Nota de uso real:
-- El runtime principal (`legacy` + `planned`) usa `/v2/completions`.
-- `/v2/planner` queda como compatibilidad en `src/api/v3/planner.py` (actualmente no conectado al path principal).
-
----
-
-## 12. Variables de entorno (agent_core)
-
-Archivo de referencia: `.env.example`
-
-| Variable | Default | Uso principal |
-|---|---|---|
-| `UNPAYWALL_EMAIL` | vacío | downloader de papers (document_rag) |
-| `MP_API_KEY` | vacío | Materials Project query tool |
-| `SEMANTIC_SCHOLAR_API_KEY` | vacío | search docs provider |
-| `CROSSREF_EMAIL` | vacío | search docs provider |
-| `AGENTS_URL` | `http://agents:8003` | planner, completions, insights |
-| `AGENTS_SERVICE_URL` | `http://agents:8000` | embeddings service |
-| `CORS_ALLOW_ORIGINS` | `http://localhost:3000` | API CORS |
-| `AGENT_POLICY_MODE` | `legacy` | selección de policy engine |
-| `AGENT_EVALUATOR_STOP_TAU` | `0.75` | threshold de stop gating |
-| `AGENT_TRACE_DIR` | `agent_core/data/traces` | persistencia de trazas |
-| `AGENT_PLANNER_MODEL` | `deepseek-r1:8b` | modelo planner one-shot v4 |
-| `AGENT_EVALUATOR_MODEL` | `yasserrmd/Qwen2.5-7B-Instruct-1M` | modelo evaluador v4 |
-
-`AGENT_*_MODEL` se define en `agent_core` como configuración de request hacia `agents`.
-
----
-
-## 13. Persistencia de trazas
-
-Archivos:
-- `src/api/v3/service.py` (`_persist_trace`) para modo `legacy`.
-- `src/api/v4/trace.py` (`TraceEmitter._persist`) para modo `planned`.
-
-Ruta:
-- `{AGENT_TRACE_DIR}/{request_id}.json`
-
-Contenido persistido (varía por modo):
-- `legacy`: query, intent, stop_reason, execution_status, budget, tool_calls, policy_trace, evaluator_feedback, confidence/risk trajectory, materials/documents/insights, final_answer.
-- `planned`: query, stop_reason, plan, budget, plan_modifications_used, trace de eventos, final_answer.
-
----
-
-## 14. Riesgos y notas operativas actuales
-
-1. Modo `planned` usa fallback a legacy para mantener continuidad si falla planificación local one-shot.
-2. La calidad del plan inicial depende del prompt y catálogo de tools; coherencia mínima evita secuencias inviables básicas.
-3. Stop gating depende de calidad de señal del evaluador; `AGENT_EVALUATOR_STOP_TAU` permite calibración conservadora/agresiva.
-
----
-
-## 15. Checklist de verificación rápida
-
-1. `AGENT_POLICY_MODE` configurado (`legacy|planned`).
-2. `AGENTS_URL` y `AGENTS_SERVICE_URL` resolviendo servicios correctos.
-3. `POST /v2/completions` disponible en `agents` (crítico para planner/evaluator/final answer).
-4. Si se usa `document_rag`, verificar disponibilidad de `POST /v2/insights`.
-5. Si se usa ranking híbrido/embeddings en tools, verificar `POST /v2/embeddings`.
-6. `AGENT_EVALUATOR_STOP_TAU` definido según política de riesgo (aplica a legacy).
-7. Herramientas registradas y contratos válidos en `ToolRegistry`.
-
----
-
-**Última actualización:** Abril 7, 2026
-**Versión:** v3.4
-**Tipo de documento:** Técnico/Profundo
+**Ultima actualizacion:** Abril 7, 2026
+**Version documento:** v4.1
+**Tipo:** Tecnico operativo

@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from api.v3.state import AgentState, BudgetState, MaterialRecord
+from api.v4.contracts import Plan
+from api.v4.state import AgentState, BudgetState, MaterialHypothesis as MaterialRecord
 
 
 pytestmark = [pytest.mark.real_endpoints, pytest.mark.integration_docker]
@@ -34,7 +35,7 @@ def _material_rows_to_state(rows: list[dict]) -> AgentState:
     state = AgentState(
         request_id="real-tools-state",
         query="validate constraints",
-        intent="constraint_validation",
+        plan=Plan(steps=[], cursor=0, status="active"),
         budget=BudgetState(),
     )
     for row in rows:

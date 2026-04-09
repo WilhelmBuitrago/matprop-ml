@@ -10,7 +10,10 @@ from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 import pytest
 import requests
 
-from api.v3.scheme import CompletionRequestV3, CompletionResponseV3
+from api.v4.scheme import (
+    CompletionRequestV4 as CompletionRequest,
+    CompletionResponseV4 as CompletionResponse,
+)
 from report_generator import BugFinding, TestReport
 
 
@@ -69,7 +72,7 @@ def _agent_core_ready(base_url: str, timeout_seconds: int) -> tuple[bool, str]:
     probes = (
         ("/v1/health", {200}),
         ("/health", {200}),
-        ("/v3/completions", {405, 422}),
+        ("/v4/completions", {405, 422}),
     )
     last_error = ""
     for path, accepted in probes:
@@ -253,10 +256,10 @@ def real_agent_client(
     require_real_services,
     real_runtime_config: RealRuntimeConfig,
 ):
-    endpoint = f"{real_runtime_config.agent_core_url}/v3/completions"
+    endpoint = f"{real_runtime_config.agent_core_url}/v4/completions"
 
     def _post(
-        request_obj: CompletionRequestV3,
+        request_obj: CompletionRequest,
         *,
         stream: bool = False,
         extra_headers: Optional[Dict[str, str]] = None,
@@ -293,7 +296,7 @@ def real_agent_client(
 
 @pytest.fixture
 def test_request_builder():
-    def _build(**overrides: Any) -> CompletionRequestV3:
+    def _build(**overrides: Any) -> CompletionRequest:
         payload = {
             "query": "Find mp-149 and summarize key properties.",
             "stream": False,
@@ -302,23 +305,23 @@ def test_request_builder():
             "max_iterations": 8,
             "max_tool_calls": 8,
             "max_context_tokens": 2048,
-            "max_wall_time_ms": 30000,
+            "max_wall_time_ms": None,
         }
         payload.update(overrides)
-        return CompletionRequestV3(**payload)
+        return CompletionRequest(**payload)
 
     return _build
 
 
 @pytest.fixture
 def parse_completion_response():
-    def _parse(response: requests.Response) -> CompletionResponseV3:
+    def _parse(response: requests.Response) -> CompletionResponse:
         assert response.status_code == 200, (
-            f"Expected HTTP 200 from /v3/completions, got {response.status_code}: "
+            f"Expected HTTP 200 from /v4/completions, got {response.status_code}: "
             f"{response.text[:400]}"
         )
         payload = response.json()
-        return CompletionResponseV3.model_validate(payload)
+        return CompletionResponse.model_validate(payload)
 
     return _parse
 

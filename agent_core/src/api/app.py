@@ -21,7 +21,7 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Agent Core API", version="3.0.0", lifespan=_lifespan)
+app = FastAPI(title="Agent Core API", version="4.0.0", lifespan=_lifespan)
 
 
 @app.middleware("http")
@@ -30,7 +30,7 @@ async def log_http_requests(request: Request, call_next):
     response = await call_next(request)
     elapsed_ms = (time.perf_counter() - start) * 1000
 
-    if request.url.path == "/v3/completions":
+    if request.url.path == "/v4/completions":
         logger.info(
             "Incoming request method=%s path=%s status=%s duration_ms=%.2f",
             request.method,

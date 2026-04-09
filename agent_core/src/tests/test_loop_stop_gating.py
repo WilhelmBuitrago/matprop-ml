@@ -1,76 +1,157 @@
-from api.v3.loop import early_stop_accuracy, should_stop
-from api.v3.state import EvaluatorFeedback
+from api.v4.contracts import EvaluatorFeedback as EvaluatorFeedbackV4, Plan, PlanStep
+from api.v4.loop import run_loop as run_loop_v4
+from api.v4.state import AgentState as AgentStateV4, BudgetState as BudgetStateV4
+from tools.base import ToolResult
 
 
-def _feedback(
-    verdict: str,
-    confidence: float,
-    risk_if_stop: str,
-    can_answer: bool,
-) -> EvaluatorFeedback:
-    return EvaluatorFeedback(
-        verdict=verdict,
-        confidence=confidence,
-        missing_information=[],
-        risk_if_stop=risk_if_stop,
-        can_answer=can_answer,
-        reasoning="test",
+class _ToolStub:
+    name = "query_materials_database"
+    input_schema = {"type": "object"}
+    output_schema = {"type": "object"}
+
+    def execute(self, **_kwargs):
+        return ToolResult(status="success", payload={"materials": [], "count": 0})
+
+
+class _RegistryStub:
+    def __init__(self):
+        self._tool = _ToolStub()
+
+    def can_run(self, _tool_name, _state):
+        return True
+
+    def validate_input(self, _tool_name, _arguments):
+        return True, ""
+
+    def validate_output(self, _tool_name, _payload):
+        return True, ""
+
+    def get(self, _tool_name):
+        return self._tool
+
+
+class _PlannerStub:
+    def build_plan(self, **_kwargs):  # pragma: no cover - not used in these tests
+        raise AssertionError("replanning is not expected in this scenario")
+
+
+class _EvaluatorStub:
+    def __init__(self, feedback: EvaluatorFeedbackV4):
+        self._feedback = feedback
+
+    async def evaluate(self, _state):
+        return self._feedback
+
+    def build_history(self, _state):
+        return []
+
+
+class _EmitterStub:
+    def __init__(self):
+        self.events = []
+
+    async def emit(self, event, payload, **kwargs):
+        self.events.append((event, payload, kwargs))
+
+
+def _should_stop(feedback: EvaluatorFeedbackV4) -> bool:
+    return feedback.stop and feedback.constraints_ok
+
+
+def test_v4_stop_gating_requires_constraints_ok():
+    assert (
+        _should_stop(
+            EvaluatorFeedbackV4(
+                stop=True,
+                constraints_ok=False,
+                modify_plan=False,
+                feedback="missing constraints",
+            )
+        )
+        is False
+    )
+    assert (
+        _should_stop(
+            EvaluatorFeedbackV4(
+                stop=True,
+                constraints_ok=True,
+                modify_plan=False,
+                feedback="enough evidence",
+            )
+        )
+        is True
     )
 
 
-def test_should_stop_when_all_gates_pass():
-    feedback = _feedback(
-        verdict="sufficient",
-        confidence=0.82,
-        risk_if_stop="medium",
-        can_answer=True,
+def _build_v4_state() -> AgentStateV4:
+    return AgentStateV4(
+        request_id="v4-stop",
+        query="find mp-149",
+        plan=Plan(
+            steps=[
+                PlanStep(
+                    tool="query_materials_database",
+                    target="mp-149",
+                    purpose="Collect materials evidence",
+                )
+            ],
+            cursor=0,
+            status="active",
+        ),
+        budget=BudgetStateV4(max_iterations=2, max_tool_calls=2, max_wall_time_ms=None),
     )
-    assert should_stop(feedback, tau=0.75) is True
 
 
-def test_should_not_stop_when_can_answer_false():
-    feedback = _feedback(
-        verdict="sufficient",
-        confidence=0.95,
-        risk_if_stop="low",
-        can_answer=False,
+def test_v4_does_not_stop_without_constraints_ok():
+    import asyncio
+
+    state = _build_v4_state()
+    evaluator = _EvaluatorStub(
+        EvaluatorFeedbackV4(
+            stop=True,
+            constraints_ok=False,
+            modify_plan=False,
+            feedback="constraints are incomplete",
+        )
     )
-    assert should_stop(feedback, tau=0.75) is False
 
-
-def test_should_not_stop_when_verdict_insufficient():
-    feedback = _feedback(
-        verdict="insufficient",
-        confidence=0.95,
-        risk_if_stop="low",
-        can_answer=True,
+    out = asyncio.run(
+        run_loop_v4(
+            state,
+            _RegistryStub(),
+            _PlannerStub(),
+            evaluator,
+            _EmitterStub(),
+            [{"name": "query_materials_database", "description": "query"}],
+        )
     )
-    assert should_stop(feedback, tau=0.75) is False
+
+    assert out.stop_reason != "sufficient_evidence"
+    assert out.stop_reason == "plan_exhausted"
 
 
-def test_should_not_stop_when_confidence_below_threshold():
-    feedback = _feedback(
-        verdict="sufficient",
-        confidence=0.60,
-        risk_if_stop="low",
-        can_answer=True,
+def test_v4_stops_when_constraints_ok_is_true():
+    import asyncio
+
+    state = _build_v4_state()
+    evaluator = _EvaluatorStub(
+        EvaluatorFeedbackV4(
+            stop=True,
+            constraints_ok=True,
+            modify_plan=False,
+            feedback="enough evidence",
+        )
     )
-    assert should_stop(feedback, tau=0.75) is False
 
-
-def test_should_not_stop_when_risk_high():
-    feedback = _feedback(
-        verdict="sufficient",
-        confidence=0.91,
-        risk_if_stop="high",
-        can_answer=True,
+    out = asyncio.run(
+        run_loop_v4(
+            state,
+            _RegistryStub(),
+            _PlannerStub(),
+            evaluator,
+            _EmitterStub(),
+            [{"name": "query_materials_database", "description": "query"}],
+        )
     )
-    assert should_stop(feedback, tau=0.75) is False
 
-
-def test_early_stop_accuracy_formula():
-    assert early_stop_accuracy(correct_early_stops=9, total_early_stops=10) == 0.9
-
-
-def test_early_stop_accuracy_handles_zero_total():
-    assert early_stop_accuracy(correct_early_stops=0, total_early_stops=0) == 0.0
+    assert out.stop_reason == "sufficient_evidence"

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
-import json
 import os
 
 import requests
@@ -17,6 +16,12 @@ class PlannerOutcome:
 
 
 class DeepSeekOneShotPlanner:
+    """Planner service for v4 runtime.
+
+    This component creates plans (initial plan and optional replans) and never
+    performs loop evaluation decisions.
+    """
+
     def __init__(
         self,
         *,
@@ -28,9 +33,10 @@ class DeepSeekOneShotPlanner:
         self._agents_url = (
             agents_url or os.getenv("AGENTS_URL", "http://agents:8003")
         ).rstrip("/")
-        self._endpoint = f"{self._agents_url}/v2/completions"
+        self._endpoint = f"{self._agents_url}/v2/planning-evaluator"
         self._model_name = model_name or os.getenv(
-            "AGENT_PLANNER_MODEL", "deepseek-r1:8b"
+            "AGENT_PLANNING_EVALUATOR_MODEL",
+            os.getenv("AGENT_PLANNER_MODEL", "deepseek-r1:8b"),
         )
         self._max_steps = max_steps
         self._timeout_seconds = timeout_seconds
@@ -40,32 +46,21 @@ class DeepSeekOneShotPlanner:
         *,
         query: str,
         tool_catalog: list[dict[str, Any]],
+        history: list[dict[str, str]] | None = None,
+        state: dict[str, Any] | None = None,
+        feedback: str | None = None,
     ) -> PlannerOutcome:
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a scientific planning agent specialized in materials science. "
-                    "Generate a minimal, efficient sequence of tool calls. "
-                    "Only use tools from the provided catalog. "
-                    "Return only valid JSON, no explanation."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Query: {query}\\n\\n"
-                    f"Available tools:\\n{self._format_tool_catalog(tool_catalog)}\\n\\n"
-                    'Return JSON: {"steps": [{"tool": "...", "target": "...", "purpose": "..."}]}'
-                ),
-            },
-        ]
-
+        """Build a plan from query/context without evaluating loop outcomes."""
         payload = {
-            "history": messages,
+            "mode": "plan",
+            "query": query,
             "model_name": self._model_name,
-            "temperature": 0.1,
-            "max_tokens": 512,
+            "history": history or [],
+            "tools_available": tool_catalog,
+            "state": state or {},
+            "plan": {},
+            "execution_state": {"feedback": feedback or ""},
+            "max_steps": self._max_steps,
         }
 
         try:
@@ -76,13 +71,12 @@ class DeepSeekOneShotPlanner:
                 timeout=self._timeout_seconds,
             )
             response.raise_for_status()
-            raw_text = self._extract_model_text(response.json())
+            parsed = response.json()
         except Exception:
             return PlannerOutcome(plan=None, fallback_reason="planner_request_failed")
 
-        parsed = self._parse_json_object(raw_text)
-        if parsed is None:
-            return PlannerOutcome(plan=None, fallback_reason="planner_invalid_json")
+        if not isinstance(parsed, dict):
+            return PlannerOutcome(plan=None, fallback_reason="planner_invalid_payload")
 
         steps = self._normalize_steps(parsed=parsed, tool_catalog=tool_catalog)
         if not steps:
@@ -95,44 +89,6 @@ class DeepSeekOneShotPlanner:
             return PlannerOutcome(plan=None, fallback_reason="planner_incoherent")
 
         return PlannerOutcome(plan=plan, fallback_reason=None)
-
-    def _format_tool_catalog(self, tool_catalog: list[dict[str, Any]]) -> str:
-        compact = [
-            {
-                "name": str(item.get("name", "")).strip(),
-                "description": str(item.get("description", "")).strip(),
-            }
-            for item in tool_catalog
-            if isinstance(item, dict)
-        ]
-        return json.dumps(compact, ensure_ascii=True)
-
-    def _extract_model_text(self, payload: Any) -> str:
-        if isinstance(payload, str):
-            return payload
-        if isinstance(payload, dict):
-            if isinstance(payload.get("response"), str):
-                return payload["response"]
-            return payload.get("choices", [{}])[0].get("message", {}).get("content", "")
-        return str(payload or "")
-
-    def _parse_json_object(self, text: str) -> dict[str, Any] | None:
-        if not text:
-            return None
-
-        try:
-            parsed = json.loads(text)
-            return parsed if isinstance(parsed, dict) else None
-        except json.JSONDecodeError:
-            start = text.find("{")
-            end = text.rfind("}")
-            if start < 0 or end <= start:
-                return None
-            try:
-                parsed = json.loads(text[start : end + 1])
-                return parsed if isinstance(parsed, dict) else None
-            except json.JSONDecodeError:
-                return None
 
     def _normalize_steps(
         self,
@@ -154,10 +110,22 @@ class DeepSeekOneShotPlanner:
         for raw in raw_steps[: self._max_steps]:
             if not isinstance(raw, dict):
                 continue
+            action = str(raw.get("action", "use_tool")).strip().lower()
+            if action == "respond":
+                continue
+
             tool = str(raw.get("tool", "")).strip()
             if tool not in allowed_tools:
                 continue
+
             target = raw.get("target")
+            if target is None and isinstance(raw.get("input"), dict):
+                input_payload = raw.get("input", {})
+                target = (
+                    input_payload.get("material_id")
+                    or input_payload.get("formula")
+                    or input_payload.get("query")
+                )
             purpose = str(raw.get("purpose", raw.get("reason", ""))).strip()
             if not purpose:
                 purpose = f"Execute {tool}"

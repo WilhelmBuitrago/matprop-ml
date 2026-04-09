@@ -1,6 +1,7 @@
 """Model registry and configuration."""
 
 from .registry import (
+    AGENT_BASE_MODEL,
     ALL_MODELS,
     CIF_MODEL,
     EMBEDDING_MODEL,
@@ -8,10 +9,12 @@ from .registry import (
     FINAL_MODEL,
     GENERATION_MODELS,
     INSIGHTS_MODEL,
+    PLANNING_EVALUATOR_MODEL,
     PLANNER_MODEL,
 )
 
 __all__ = [
+    "AGENT_BASE_MODEL",
     "ALL_MODELS",
     "CIF_MODEL",
     "EMBEDDING_MODEL",
@@ -19,5 +22,6 @@ __all__ = [
     "FINAL_MODEL",
     "GENERATION_MODELS",
     "INSIGHTS_MODEL",
+    "PLANNING_EVALUATOR_MODEL",
     "PLANNER_MODEL",
 ]

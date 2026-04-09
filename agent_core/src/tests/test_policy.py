@@ -1,47 +1,62 @@
-from api.v3.policy import PolicyEngine
-from api.v3.state import AgentState, BudgetState, MaterialRecord
-from tools.config import TOOL_REGISTRY
+from api.v4.entry_policy import EntryPolicyV4
 
 
-def _state(query: str) -> AgentState:
-    return AgentState(
-        request_id="r1",
-        query=query,
-        intent="material_lookup",
-        budget=BudgetState(
-            max_iterations=8,
-            max_tool_calls=8,
-            max_context_tokens=2048,
-            max_wall_time_ms=30000,
-        ),
+class _RegistryStub:
+    def __init__(self, catalog: list[dict]):
+        self._catalog = catalog
+
+    def as_schema_catalog(self) -> list[dict]:
+        return list(self._catalog)
+
+
+def _catalog() -> list[dict]:
+    return [
+        {
+            "name": "query_materials_database",
+            "description": "Query materials by formula and band gap properties.",
+            "input_schema": {"type": "object"},
+            "output_schema": {"type": "object"},
+        },
+        {
+            "name": "search_scientific_documents",
+            "description": "Search literature for material evidence.",
+            "input_schema": {"type": "object"},
+            "output_schema": {"type": "object"},
+        },
+        {
+            "name": "document_rag",
+            "description": "Extract evidence from retrieved documents.",
+            "input_schema": {"type": "object"},
+            "output_schema": {"type": "object"},
+        },
+    ]
+
+
+def test_entry_policy_selection_is_deterministic_when_embeddings_fail(monkeypatch):
+    policy = EntryPolicyV4(top_k=2)
+    registry = _RegistryStub(_catalog())
+
+    def _raise(*_args, **_kwargs):
+        raise RuntimeError("embedding backend unavailable")
+
+    monkeypatch.setattr(policy._embedding_cache, "initialize", _raise)
+
+    first = policy.select_tools(
+        query="compare candidate materials by band gap",
+        registry=registry,
+    )
+    second = policy.select_tools(
+        query="compare candidate materials by band gap",
+        registry=registry,
     )
 
-
-def test_policy_selection_is_deterministic_for_same_state():
-    policy = PolicyEngine()
-    state = _state("find band gap for mp-149")
-
-    d1 = policy.decide(state, TOOL_REGISTRY)
-    d2 = policy.decide(state, TOOL_REGISTRY)
-
-    assert d1.tool_name == d2.tool_name
-    assert d1.tool_arguments == d2.tool_arguments
+    assert [item["name"] for item in first] == [item["name"] for item in second]
 
 
-def test_policy_handles_compare_intent_without_compare_tool():
-    policy = PolicyEngine()
-    state = _state("compare candidate materials")
-    state.materials_found.append(
-        MaterialRecord(material_id="mp-149", formula="Si", properties={})
-    )
-    state.materials_found.append(
-        MaterialRecord(material_id="mp-804", formula="GaAs", properties={})
-    )
+def test_entry_policy_respects_top_k_bound():
+    policy = EntryPolicyV4(top_k=10)
+    registry = _RegistryStub(_catalog()[:2])
 
-    decision = policy.decide(state, TOOL_REGISTRY)
+    selected = policy.select_tools(query="find materials", registry=registry)
 
-    assert decision.tool_name in {
-        "query_materials_database",
-        "search_scientific_documents",
-        "validate_material_constraints",
-    }
+    assert len(selected) == 2

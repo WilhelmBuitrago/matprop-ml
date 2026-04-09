@@ -23,7 +23,58 @@ def fake_requests_post(monkeypatch):
         def json(self):
             return self._payload
 
-    def _post(url, json=None, headers=None, timeout=None):
+    def _post(url, json=None, headers=None, timeout=None, **kwargs):
+        if url.endswith("/v2/embeddings"):
+            texts = (json or {}).get("texts", [])
+            vectors = []
+            for text in texts:
+                lowered = str(text).lower()
+                vectors.append(
+                    [
+                        float(len(lowered.split())),
+                        float("materials" in lowered),
+                        float("document" in lowered),
+                        float("structure" in lowered),
+                    ]
+                )
+            return _Resp({"embeddings": vectors})
+
+        if url.endswith("/v2/planning-evaluator"):
+            mode = str((json or {}).get("mode", "")).strip().lower()
+            if mode == "plan":
+                tools_available = (json or {}).get("tools_available", [])
+                default_tool = "query_materials_database"
+                selected_tool = default_tool
+                if tools_available and isinstance(tools_available[0], dict):
+                    selected_tool = (
+                        str(tools_available[0].get("name", default_tool)).strip()
+                        or default_tool
+                    )
+                return _Resp(
+                    {
+                        "steps": [
+                            {
+                                "action": "use_tool",
+                                "tool": selected_tool,
+                                "target": "mp-149",
+                                "purpose": "Collect evidence for the query",
+                            }
+                        ]
+                    }
+                )
+
+            if mode == "evaluate":
+                return _Resp(
+                    {
+                        "stop": True,
+                        "constraints_ok": True,
+                        "modify_plan": False,
+                        "feedback": "enough evidence collected",
+                    }
+                )
+
+            return _Resp({"steps": []})
+
         if url.endswith("/v2/insights"):
             return _Resp({"insights": ["Fact A", "Fact B"]})
 
@@ -51,15 +102,15 @@ def fake_requests_post(monkeypatch):
 
 @pytest.fixture
 def make_service(monkeypatch, tmp_path, fake_requests_post):
-    """Create v3 service with trace output redirected to temp dir."""
+    """Create completion service with trace output redirected to temp dir."""
 
     monkeypatch.setenv("AGENT_TRACE_DIR", str(tmp_path / "traces"))
     monkeypatch.setenv("AGENTS_URL", "http://agents:8003")
 
-    from api.v3.service import CompletionServiceV3
+    from api.v4.service import PlannedRuntimeV4Service
 
     def _factory():
-        return CompletionServiceV3()
+        return PlannedRuntimeV4Service()
 
     return _factory
 

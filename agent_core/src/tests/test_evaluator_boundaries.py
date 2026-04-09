@@ -1,27 +1,81 @@
-from api.v3.evaluator import Evaluator
-from api.v3.state import AgentState, BudgetState
+from api.v4.contracts import Plan, PlanStep
+from api.v4.evaluator import LoopEvaluatorV4
+from api.v4.state import AgentState, BudgetState
+from api.v4.trace import TraceEntry
 
 
-def test_evaluator_returns_structured_suggestions_only(fake_requests_post):
-    evaluator = Evaluator()
+def test_v4_evaluator_returns_structured_feedback(fake_requests_post):
+    import asyncio
+
+    evaluator = LoopEvaluatorV4()
     state = AgentState(
-        request_id="r-eval",
+        request_id="r-eval-v4-structured",
         query="find best semiconductor",
-        intent="material_lookup",
-        budget=BudgetState(),
+        plan=Plan(
+            steps=[
+                PlanStep(
+                    tool="query_materials_database",
+                    target="mp-149",
+                    purpose="Collect evidence",
+                )
+            ],
+            cursor=0,
+            status="active",
+        ),
+        budget=BudgetState(max_iterations=4, max_tool_calls=4, max_wall_time_ms=None),
     )
 
-    feedback = evaluator.evaluate(
-        state=state,
-        tool_name="query_materials_database",
-        tool_output={"materials": [], "count": 0},
-        next_planned_step="validate_material_constraints",
-        tools_available=["query_materials_database", "validate_material_constraints"],
+    feedback = asyncio.run(evaluator.evaluate(state))
+
+    assert isinstance(feedback.stop, bool)
+    assert isinstance(feedback.constraints_ok, bool)
+    assert isinstance(feedback.modify_plan, bool)
+    assert isinstance(feedback.feedback, str)
+    assert feedback.feedback
+
+
+def test_v4_evaluator_history_uses_only_valid_roles_and_no_side_effects():
+    evaluator = LoopEvaluatorV4()
+    state = AgentState(
+        request_id="r-eval-v4",
+        query="find best semiconductor",
+        plan=Plan(
+            steps=[
+                PlanStep(
+                    tool="query_materials_database",
+                    target="mp-149",
+                    purpose="Collect evidence",
+                )
+            ],
+            cursor=0,
+            status="active",
+        ),
+        budget=BudgetState(max_iterations=4, max_tool_calls=4, max_wall_time_ms=None),
     )
 
-    assert feedback.verdict in {"sufficient", "insufficient"}
-    assert 0.0 <= feedback.confidence <= 1.0
-    assert isinstance(feedback.missing_information, list)
-    assert feedback.risk_if_stop in {"low", "medium", "high"}
-    assert isinstance(feedback.can_answer, bool)
-    assert feedback.reasoning
+    state.execution_trace.append(
+        TraceEntry(
+            iteration=1,
+            event="tool_start",
+            payload={"tool": "query_materials_database"},
+            trace_model="tool start",
+        )
+    )
+    state.execution_trace.append(
+        TraceEntry(
+            iteration=1,
+            event="tool_result",
+            payload={"status": "success"},
+            trace_model="tool result",
+        )
+    )
+
+    before = list(state.execution_trace)
+    history = evaluator.build_history(state)
+
+    assert state.execution_trace == before
+    assert history
+    assert {item["role"] for item in history}.issubset(
+        {"system", "user", "assistant", "tool"}
+    )
+    assert all(item["role"] != "evaluator" for item in history)

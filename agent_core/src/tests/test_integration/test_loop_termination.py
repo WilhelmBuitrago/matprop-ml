@@ -1,66 +1,133 @@
-from api.v3.loop import run_loop
-from api.v3.policy import PolicyEngine
-from api.v3.evaluator import Evaluator
-from api.v3.state import AgentState, BudgetState
+import asyncio
+
+from api.v4.contracts import EvaluatorFeedback, Plan, PlanStep
+from api.v4.loop import run_loop
+from api.v4.state import AgentState, BudgetState
 from tools.config import TOOL_REGISTRY
+from tools.base import ToolResult
 
 
-class _AlwaysSufficientEvaluator(Evaluator):
-    def evaluate(
-        self,
-        state,
-        tool_name,
-        tool_output,
-        next_planned_step,
-        tools_available,
-    ):
-        from api.v3.state import EvaluatorFeedback
-
-        return EvaluatorFeedback(
-            verdict="sufficient",
-            confidence=0.9,
-            missing_information=[],
-            risk_if_stop="low",
-            can_answer=True,
-            reasoning="enough",
+def _patch_query_tool_success(monkeypatch):
+    def _execute(_self, **_kwargs):
+        return ToolResult(
+            status="success",
+            payload={
+                "materials": [
+                    {
+                        "material_id": "mp-149",
+                        "formula": "Si",
+                        "band_gap": 1.1,
+                        "density": 2.3,
+                        "is_stable": True,
+                        "is_metal": False,
+                        "energy_above_hull": 0.0,
+                        "formation_energy": -0.5,
+                        "volume": 20.0,
+                    }
+                ],
+                "count": 1,
+            },
         )
 
+    monkeypatch.setattr(
+        "tools.catalog.query_materials.tool.QueryMaterialsDatabaseTool.execute",
+        _execute,
+    )
 
-def test_termination_on_sufficient_evidence():
+
+class _AlwaysSufficientEvaluator:
+    async def evaluate(self, state):
+        del state
+        return EvaluatorFeedback(
+            stop=True,
+            constraints_ok=True,
+            modify_plan=False,
+            feedback="enough",
+        )
+
+    def build_history(self, state):
+        del state
+        return []
+
+
+class _PlannerStub:
+    def build_plan(self, **_kwargs):  # pragma: no cover - replanning not expected
+        raise AssertionError("replanning is not expected in this scenario")
+
+
+class _EmitterStub:
+    async def emit(self, *_args, **_kwargs):
+        return None
+
+
+def test_termination_on_sufficient_evidence(monkeypatch):
+    _patch_query_tool_success(monkeypatch)
     state = AgentState(
         request_id="r-term",
         query="find mp-149",
-        intent="material_lookup",
+        plan=Plan(
+            steps=[
+                PlanStep(
+                    tool="query_materials_database",
+                    target="mp-149",
+                    purpose="Collect evidence",
+                )
+            ],
+            cursor=0,
+            status="active",
+        ),
         budget=BudgetState(
             max_iterations=8,
             max_tool_calls=8,
-            max_context_tokens=2048,
-            max_wall_time_ms=30000,
+            max_wall_time_ms=None,
         ),
     )
-    out = run_loop(state, PolicyEngine(), _AlwaysSufficientEvaluator(), TOOL_REGISTRY)
+    out = asyncio.run(
+        run_loop(
+            state,
+            TOOL_REGISTRY,
+            _PlannerStub(),
+            _AlwaysSufficientEvaluator(),
+            _EmitterStub(),
+            TOOL_REGISTRY.as_schema_catalog(),
+        )
+    )
 
-    last_trace = out.policy_trace[-1] if out.policy_trace else {}
-    assert (
-        out.stop_reason == "sufficient_evidence"
-    ), f"unexpected stop_reason={out.stop_reason}; last_policy_trace={last_trace}"
-    assert out.execution_status == "done"
-    assert out.evaluation_trace
-    assert out.evaluation_trace[-1]["eval"]["can_answer"] is True
+    assert out.stop_reason == "sufficient_evidence"
+    assert out.plan.status == "completed"
 
 
-def test_termination_when_budget_exceeded_immediately():
+def test_termination_when_budget_exceeded_immediately(monkeypatch):
+    _patch_query_tool_success(monkeypatch)
     state = AgentState(
         request_id="r-term2",
         query="find mp-149",
-        intent="material_lookup",
+        plan=Plan(
+            steps=[
+                PlanStep(
+                    tool="query_materials_database",
+                    target="mp-149",
+                    purpose="Collect evidence",
+                )
+            ],
+            cursor=0,
+            status="active",
+        ),
         budget=BudgetState(
             max_iterations=1,
             max_tool_calls=0,
-            max_context_tokens=2048,
-            max_wall_time_ms=30000,
+            max_wall_time_ms=None,
         ),
     )
-    out = run_loop(state, PolicyEngine(), _AlwaysSufficientEvaluator(), TOOL_REGISTRY)
+    out = asyncio.run(
+        run_loop(
+            state,
+            TOOL_REGISTRY,
+            _PlannerStub(),
+            _AlwaysSufficientEvaluator(),
+            _EmitterStub(),
+            TOOL_REGISTRY.as_schema_catalog(),
+        )
+    )
 
-    assert out.stop_reason in {"max_tool_calls", "budget_exhausted"}
+    assert out.stop_reason == "budget_exhausted"

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List
+from typing import Any
 
 
-def messages_to_history(messages: Iterable[Dict[str, Any]]) -> List[Dict[str, str]]:
+def messages_to_history(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     """Map OpenAI-style messages payload to agents history payload."""
-    history: List[Dict[str, str]] = []
+    history: list[dict[str, str]] = []
     for message in messages:
         role = str(message.get("role", "")).strip()
         content = str(message.get("content", "")).strip()
@@ -42,7 +42,7 @@ def clean_model_response(response: str) -> str:
     cleaned = cleaned.replace("[Response]", "").replace("[/Response]", "").strip()
 
     lines = cleaned.split("\n")
-    normalized_lines: List[str] = []
+    normalized_lines: list[str] = []
     for line in lines:
         line = line.strip()
         if not line:
