@@ -426,6 +426,88 @@ Valores observables en runtime v4:
 - `evaluator_failed`
 - `planner_failed`
 
-**Ultima actualizacion:** Abril 7, 2026
-**Version documento:** v4.1
+## 11. Delta v1.0.0 (Hardening determinista v4.1)
+
+Esta seccion reemplaza cualquier enunciado previo conflictivo en este documento.
+
+### 11.1 Nuevos modelos de estado tipado
+- `ExecutionState` (`src/api/v4/execution_state.py`):
+   - Campos: `iterations_used`, `tool_calls_used`, `replans_used`, `max_iterations`, `max_tool_calls`, `max_wall_time_ms`, `started_at_ms`.
+   - Metodos: `to_dict()`, `from_dict()`, `elapsed_ms()`.
+- `RuntimeState` (`src/api/v4/runtime_state.py`):
+   - Campos: `plan_cursor`, `plan_steps`, `steps_status`, `materials_count`, `documents_count`, `insights_count`, `stop_reason`.
+   - Metodos: `mark_step_done()`, `mark_step_failed()`, `to_dict()`.
+- Integracion en `AgentState` (`src/api/v4/state.py`):
+   - Coexiste con `BudgetState` por compatibilidad.
+   - Sincronizacion explicita por `sync_execution_state()`.
+   - Conteos runtime actualizados por `refresh_runtime_counts()`.
+
+### 11.2 History tipado y truncamiento determinista
+- `HistoryItem` (`src/api/v4/history_item.py`) con tipos validos:
+   - `query`, `plan`, `tool_call`, `tool_result`.
+- Regla: evaluator no se persiste como tipo de history.
+- Truncamiento determinista (`src/api/v4/truncation.py`):
+   - Estrategia tail-preserving: conserva eventos recientes hasta `max_tokens`.
+   - Integrado en `LoopEvaluatorV4.build_history()`.
+
+### 11.3 Contrato formal de evaluator + policy de fallo
+- `EvaluationResult` (`src/api/v4/contracts.py`):
+   - `stop`, `modify_plan`, `constraints_ok`, `reason`.
+   - Alias de compatibilidad: `feedback` -> `reason`.
+- Failure policy (`src/api/v4/failure_policy.py`):
+   - `final_with_context` si existe `tool_result` en history.
+   - `final_without_context` si no hay resultados de herramientas.
+- Integracion en `PlannedRuntimeV4Service`:
+   - Si `stop_reason_canonical == evaluator_failed`, selecciona fallback determinista segun policy.
+
+### 11.4 Validacion fuerte de plan + fallback obligatorio
+- Validador dedicado (`src/api/v4/plan_validator.py`):
+   - maximo 8 pasos.
+   - dependencias (`document_rag` requiere `search_scientific_documents`).
+   - no duplicados exactos de step.
+- Planner (`src/api/v4/planner.py`):
+   - Si plan invalido/request fallida/payload invalido -> `build_minimal_plan(...)`.
+   - `fallback_reason = invalid_plan`.
+
+### 11.5 Tool execution layer endurecida
+- Validacion input/output en loop (`src/api/v4/loop.py`) mantiene gate de schema y agrega segunda validacion por `tools/validator.py`.
+- Regla de fallo:
+   - si validacion input/output falla -> stop canonical `tool_validation_failed` (legacy `tool_execution_failed`).
+   - step marcado `failed` en `RuntimeState`.
+
+### 11.6 Loop order formal
+Orden por iteracion (estricto):
+1. validar presupuesto (`max_iterations`, `max_tool_calls`, `timeout`)
+2. ejecutar step
+3. validar output
+4. actualizar estado
+5. ejecutar evaluator
+6. branching (`completed` / `replan` / `advance cursor`)
+
+### 11.7 Stop reasons: canonico + legado
+- Canonicos (`src/api/v4/constants.py`):
+   - `completed`, `max_iterations`, `max_tool_calls`, `evaluator_failed`, `tool_validation_failed`, `invalid_plan`, `timeout` (+ transicionales internos).
+- Legado (compatibilidad externa):
+   - `sufficient_evidence`, `budget_exhausted`, `tool_execution_failed`, etc.
+- Mapeo centralizado: `to_legacy_stop_reason(...)`.
+
+### 11.8 Trazabilidad reproducible
+Trace persistido `{AGENT_TRACE_DIR}/{request_id}.json` incluye:
+- `query`
+- `plan`
+- `execution_state`
+- `runtime_state`
+- `history`
+- `evaluations`
+- `stop_reason`
+- `stop_reason_canonical`
+- `final_answer`
+
+### 11.9 Integracion con agents
+- Planner: `mode=plan`.
+- Evaluator: `mode=evaluate`.
+- Modelo de control: `deepseek-r1:8b` (via env `AGENT_PLANNING_EVALUATOR_MODEL` con fallback planner/evaluator model vars).
+
+**Ultima actualizacion:** Abril 9, 2026
+**Version documento:** v1.0.0
 **Tipo:** Tecnico operativo

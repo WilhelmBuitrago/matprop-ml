@@ -7,8 +7,10 @@ import os
 
 import requests
 
-from .contracts import EvaluatorFeedback
+from .contracts import EvaluationResult
+from .history_item import HistoryItem
 from .state import AgentState
+from .truncation import truncate_history
 
 
 EVALUATOR_SYSTEM_MESSAGE = (
@@ -30,6 +32,7 @@ class LoopEvaluatorV4:
         agents_url: str | None = None,
         model_name: str | None = None,
         timeout_seconds: int = 45,
+        max_history_tokens: int | None = None,
     ) -> None:
         self._agents_url = (
             agents_url or os.getenv("AGENTS_URL", "http://agents:8003")
@@ -40,12 +43,24 @@ class LoopEvaluatorV4:
             os.getenv("AGENT_EVALUATOR_MODEL", "deepseek-r1:8b"),
         )
         self._timeout_seconds = timeout_seconds
+        self._max_history_tokens = int(
+            max_history_tokens
+            if max_history_tokens is not None
+            else os.getenv("AGENT_HISTORY_MAX_TOKENS", "2048")
+        )
 
-    async def evaluate(self, state: AgentState) -> EvaluatorFeedback:
+    async def evaluate(self, state: AgentState) -> EvaluationResult:
         """Evaluate current loop state and return control feedback."""
         return await asyncio.to_thread(self._evaluate_sync, state)
 
-    def _evaluate_sync(self, state: AgentState) -> EvaluatorFeedback:
+    def _evaluate_sync(self, state: AgentState) -> EvaluationResult:
+        state.sync_execution_state()
+        state.refresh_runtime_counts()
+
+        execution_state_payload = {}
+        if state.execution_state is not None:
+            execution_state_payload = state.execution_state.to_dict()
+
         payload = {
             "mode": "evaluate",
             "query": state.query,
@@ -54,11 +69,7 @@ class LoopEvaluatorV4:
             "tools_available": [],
             "state": self._state_snapshot(state),
             "plan": state.plan.model_dump(),
-            "execution_state": {
-                "iterations_used": state.budget.iterations_used,
-                "tool_calls_used": state.budget.tool_calls_used,
-                "replans_used": state.replans_used,
-            },
+            "execution_state": execution_state_payload,
             "max_steps": max(1, len(state.plan.steps)),
         }
 
@@ -77,56 +88,88 @@ class LoopEvaluatorV4:
             constraints_ok = bool(
                 parsed.get("constraints_ok", parsed.get("stop", False))
             )
-            return EvaluatorFeedback(
+            return EvaluationResult(
                 stop=bool(parsed.get("stop", False)),
-                constraints_ok=constraints_ok,
                 modify_plan=bool(parsed.get("modify_plan", False)),
-                feedback=feedback or "continue_with_current_plan",
+                constraints_ok=constraints_ok,
+                reason=feedback or "continue_with_current_plan",
             )
         except Exception as exc:
             raise RuntimeError(f"evaluator_failed: {exc}") from exc
 
     def build_history(self, state: AgentState) -> list[dict[str, str]]:
+        items = self.build_history_items(state)
+        truncated = truncate_history(items, max_tokens=self._max_history_tokens)
+
         messages: list[dict[str, str]] = [
             {"role": "system", "content": EVALUATOR_SYSTEM_MESSAGE},
-            {"role": "user", "content": state.query},
-            {
-                "role": "assistant",
-                "content": json.dumps(
+        ]
+        for item in truncated:
+            content = str(item.content or "").strip()
+            if not content and item.metadata:
+                content = json.dumps(item.metadata, ensure_ascii=True)
+            if item.role not in {"user", "assistant", "tool"}:
+                continue
+            if not content:
+                continue
+            messages.append({"role": item.role, "content": content})
+
+        return messages
+
+    def build_history_items(self, state: AgentState) -> list[HistoryItem]:
+        if state.history:
+            return list(state.history)
+
+        items: list[HistoryItem] = [
+            HistoryItem(role="user", type="query", content=state.query),
+            HistoryItem(
+                role="assistant",
+                type="plan",
+                content=json.dumps(
                     {"plan": state.plan.model_dump()}, ensure_ascii=True
                 ),
-            },
+                metadata={"plan": state.plan.model_dump()},
+            ),
         ]
 
         for entry in state.execution_trace:
             if entry.event == "tool_start":
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": json.dumps(
-                            {"action": "use_tool", "tool_call": entry.payload},
-                            ensure_ascii=True,
-                        ),
-                    }
+                payload = {"action": "use_tool", "tool_call": entry.payload}
+                items.append(
+                    HistoryItem(
+                        role="assistant",
+                        type="tool_call",
+                        content=json.dumps(payload, ensure_ascii=True),
+                        metadata=payload,
+                    )
                 )
             elif entry.event == "tool_result":
-                messages.append(
-                    {
-                        "role": "tool",
-                        "content": json.dumps(
-                            {"tool_result": entry.payload}, ensure_ascii=True
-                        ),
-                    }
+                payload = {"tool_result": entry.payload}
+                items.append(
+                    HistoryItem(
+                        role="tool",
+                        type="tool_result",
+                        content=json.dumps(payload, ensure_ascii=True),
+                        metadata=payload,
+                    )
                 )
 
-        return messages
+        return items
 
     def _state_snapshot(self, state: AgentState) -> dict[str, Any]:
+        state.refresh_runtime_counts()
+        runtime_state = state.runtime_state.to_dict() if state.runtime_state else {}
         return {
-            "materials_count": len(state.hypotheses),
-            "documents_count": len(state.documents),
-            "insights_count": len(state.extracted_insights),
-            "plan_cursor": state.plan.cursor,
+            "materials_count": runtime_state.get(
+                "materials_count", len(state.hypotheses)
+            ),
+            "documents_count": runtime_state.get(
+                "documents_count", len(state.documents)
+            ),
+            "insights_count": runtime_state.get(
+                "insights_count", len(state.extracted_insights)
+            ),
+            "plan_cursor": runtime_state.get("plan_cursor", state.plan.cursor),
             "plan_steps": len(state.plan.steps),
-            "stop_reason": state.stop_reason,
+            "stop_reason": state.stop_reason_canonical or state.stop_reason,
         }

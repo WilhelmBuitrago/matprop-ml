@@ -5,7 +5,10 @@ import asyncio
 import re
 
 from .contracts import ToolResult
+from .history_item import HistoryItem
+from .runtime_state import RuntimeState
 from .state import AgentState, MaterialHypothesis
+from tools.validator import validate_tool_output
 
 
 MAX_REPLANS = 2
@@ -24,10 +27,24 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
     execution. No evaluator step is run during entry-policy tool selection.
     """
     state.budget.ensure_started()
+    state.sync_execution_state()
+
+    if not state.history:
+        state.history.append(
+            HistoryItem(role="user", type="query", content=state.query)
+        )
+        state.history.append(
+            HistoryItem(
+                role="assistant",
+                type="plan",
+                content=str(state.plan.model_dump()),
+                metadata={"plan": state.plan.model_dump()},
+            )
+        )
 
     while True:
         if state.budget.iterations_used >= state.budget.max_iterations:
-            state.stop_reason = "budget_exhausted"
+            state.set_stop_reason("max_iterations")
             await emitter.emit(
                 "stop",
                 {"reason": state.stop_reason},
@@ -36,7 +53,7 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
             break
 
         if state.budget.tool_calls_used >= state.budget.max_tool_calls:
-            state.stop_reason = "budget_exhausted"
+            state.set_stop_reason("max_tool_calls")
             await emitter.emit(
                 "stop",
                 {"reason": state.stop_reason},
@@ -47,7 +64,7 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
         if state.budget.max_wall_time_ms is not None:
             elapsed = now_ms() - int(state.budget.started_at_ms or now_ms())
             if elapsed > state.budget.max_wall_time_ms:
-                state.stop_reason = "budget_exhausted"
+                state.set_stop_reason("timeout")
                 await emitter.emit(
                     "stop",
                     {"reason": state.stop_reason},
@@ -56,14 +73,16 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
                 break
 
         if state.plan.cursor >= len(state.plan.steps):
-            state.stop_reason = "plan_exhausted"
+            state.set_stop_reason("plan_exhausted")
             state.plan.status = "exhausted"
             await emitter.emit(
                 "stop", {"reason": state.stop_reason}, trace="Plan exhausted"
             )
             break
 
+        step_idx = state.plan.cursor
         state.budget.iterations_used += 1
+        state.sync_execution_state()
         step = state.plan.steps[state.plan.cursor]
 
         await emitter.emit(
@@ -71,9 +90,22 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
             {"tool": step.tool, "target": step.target, "purpose": step.purpose},
             trace=f"Ejecutando {step.tool}: {step.purpose}",
         )
+        state.history.append(
+            HistoryItem(
+                role="assistant",
+                type="tool_call",
+                content=f"{step.tool}:{step.target or ''}",
+                metadata={
+                    "tool": step.tool,
+                    "target": step.target,
+                    "purpose": step.purpose,
+                },
+            )
+        )
 
         if not registry.can_run(step.tool, state):
-            state.stop_reason = "precondition_failed"
+            state.runtime_state.mark_step_failed(step_idx)
+            state.set_stop_reason("precondition_failed")
             await emitter.emit(
                 "stop",
                 {"reason": state.stop_reason, "tool": step.tool},
@@ -83,6 +115,7 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
 
         result = await _execute_tool(registry, state, step.tool, step.target)
         state.budget.tool_calls_used += 1
+        state.sync_execution_state()
 
         await emitter.emit(
             "tool_result",
@@ -94,9 +127,24 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
             },
             trace="Tool execution completed",
         )
+        state.history.append(
+            HistoryItem(
+                role="tool",
+                type="tool_result",
+                content=str(result.structured_output),
+                metadata={
+                    "tool": step.tool,
+                    "status": result.status,
+                    "error_message": result.error_message,
+                    "raw_output": result.raw_output,
+                    "structured_output": result.structured_output,
+                },
+            )
+        )
 
         if result.status != "success":
-            state.stop_reason = "tool_execution_failed"
+            state.runtime_state.mark_step_failed(step_idx)
+            state.set_stop_reason("tool_validation_failed")
             await emitter.emit(
                 "stop",
                 {
@@ -108,12 +156,14 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
             )
             break
 
+        state.runtime_state.mark_step_done(step_idx, step.tool)
         apply_tool_result(state, step.tool, result.structured_output)
+        state.refresh_runtime_counts()
 
         try:
             feedback = await evaluator.evaluate(state)
         except Exception as exc:
-            state.stop_reason = "evaluator_failed"
+            state.set_stop_reason("evaluator_failed")
             await emitter.emit(
                 "stop",
                 {"reason": state.stop_reason, "error": str(exc)},
@@ -121,14 +171,18 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
             )
             break
 
+        feedback_reason = str(
+            getattr(feedback, "reason", getattr(feedback, "feedback", ""))
+        ).strip()
+        state.evaluations.append(feedback.model_dump())
         await emitter.emit(
             "evaluation",
             feedback.model_dump(),
-            trace=feedback.feedback,
+            trace=feedback_reason,
         )
 
         if feedback.stop and feedback.constraints_ok:
-            state.stop_reason = "sufficient_evidence"
+            state.set_stop_reason("completed")
             state.plan.status = "completed"
             await emitter.emit(
                 "stop", {"reason": state.stop_reason}, trace="Evaluator decided to stop"
@@ -145,10 +199,10 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
                     "cursor": state.plan.cursor,
                     "replans_used": state.replans_used,
                 },
-                feedback=feedback.feedback,
+                feedback=feedback_reason,
             )
             if planner_outcome.plan is None:
-                state.stop_reason = "planner_failed"
+                state.set_stop_reason("planner_failed")
                 await emitter.emit(
                     "stop",
                     {
@@ -161,6 +215,27 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
 
             state.plan = planner_outcome.plan
             state.replans_used += 1
+            state.sync_execution_state()
+            state.runtime_state = RuntimeState(
+                plan_steps=[step.model_dump() for step in state.plan.steps]
+            )
+            state.refresh_runtime_counts()
+
+            if planner_outcome.fallback_reason == "invalid_plan":
+                state.constraints["invalid_plan_recovered"] = True
+                state.constraints["invalid_plan_recovery_count"] = (
+                    int(state.constraints.get("invalid_plan_recovery_count", 0)) + 1
+                )
+
+            state.history.append(
+                HistoryItem(
+                    role="assistant",
+                    type="plan",
+                    content=str(state.plan.model_dump()),
+                    metadata={"plan": state.plan.model_dump(), "source": "replan"},
+                )
+            )
+
             await emitter.emit(
                 "plan_modified",
                 state.plan.model_dump(),
@@ -169,9 +244,10 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
             continue
 
         state.plan.cursor += 1
+        state.refresh_runtime_counts()
 
     if state.stop_reason is None:
-        state.stop_reason = "budget_exhausted"
+        state.set_stop_reason("max_iterations")
 
     if state.plan.status == "active" and state.stop_reason in {
         "plan_exhausted",
@@ -191,9 +267,9 @@ async def _execute_tool(
     if not ok:
         return ToolResult(
             status="error",
-            raw_output={"validation_error": error},
+            raw_output={"validation_stage": "input", "validation_error": error},
             structured_output={},
-            error_message=error,
+            error_message=f"input_validation_failed: {error}",
         )
 
     tool = registry.get(tool_name)
@@ -226,9 +302,19 @@ async def _execute_tool(
     if not out_ok:
         return ToolResult(
             status="error",
-            raw_output=payload,
+            raw_output={"validation_stage": "output", "payload": payload},
             structured_output={},
-            error_message=out_error,
+            error_message=f"output_validation_failed: {out_error}",
+        )
+
+    tool = registry.get(tool_name)
+    output_schema = getattr(tool, "output_schema", {})
+    if output_schema and not validate_tool_output(payload, output_schema):
+        return ToolResult(
+            status="error",
+            raw_output={"validation_stage": "output", "payload": payload},
+            structured_output={},
+            error_message="output_validation_failed: schema_mismatch",
         )
 
     return ToolResult(
@@ -345,3 +431,5 @@ def apply_tool_result(
     elif tool_name == "generate_crystal_structure":
         state.constraints["structure"] = payload
         state.properties_collected["structure"] = payload
+
+    state.refresh_runtime_counts()

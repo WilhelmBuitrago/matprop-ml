@@ -41,3 +41,14 @@ class EvaluatorFeedback(BaseModel):
     constraints_ok: bool = False
     modify_plan: bool
     feedback: str = ""
+
+
+class EvaluationResult(BaseModel):
+    stop: bool
+    modify_plan: bool
+    constraints_ok: bool
+    reason: str = ""
+
+    @property
+    def feedback(self) -> str:
+        return self.reason

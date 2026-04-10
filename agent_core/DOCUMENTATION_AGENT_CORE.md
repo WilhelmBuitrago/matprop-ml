@@ -110,6 +110,54 @@ curl -X POST http://localhost:8004/v4/completions \
 - API publica actual: `v4`
 - La implementacion expone una sola version publica activa.
 
-**Ultima actualizacion:** Abril 7, 2026  
-**Version documento:** v4.0  
+## 11. Cambios operativos v1.0.0 (Major)
+
+### 11.1 Estado tipado
+- Se incorpora `ExecutionState` para control explicito de:
+  - `iterations_used`
+  - `tool_calls_used`
+  - `replans_used`
+- Se incorpora `RuntimeState` para estado global del plan:
+  - cursor
+  - estado por step
+  - conteos de materiales/documentos/insights
+  - motivo de stop canónico
+
+### 11.2 Historia semantica controlada
+- `HistoryItem` tipado con tipos validos:
+  - `query`
+  - `plan`
+  - `tool_call`
+  - `tool_result`
+- Evaluator no se guarda como item de history.
+- Truncamiento determinista por tokens para llamadas al evaluator.
+
+### 11.3 Validacion formal de plan
+- Planner usa validador fuerte de coherencia.
+- Si plan invalido: fallback obligatorio a plan minimo determinista.
+
+### 11.4 Contrato formal de evaluator y fallback
+- Evaluator retorna contrato formal (`stop`, `modify_plan`, `constraints_ok`, `reason`).
+- Si evaluator falla:
+  - con resultados de tools -> final con contexto
+  - sin resultados de tools -> final solo con query
+
+### 11.5 Stop reasons duales (transicion)
+- Interno/canonico: enum global de razones de stop.
+- Externo/legacy: valores historicos mantenidos para compatibilidad.
+- Metadata expone ambos (`stop_reason`, `stop_reason_canonical`).
+
+### 11.6 Trazabilidad reproducible obligatoria
+Cada trace JSON ahora incluye, como minimo:
+- `query`
+- `plan`
+- `execution_state`
+- `runtime_state`
+- `history`
+- `evaluations`
+- `stop_reason`
+- `final_answer`
+
+**Ultima actualizacion:** Abril 9, 2026  
+**Version documento:** v1.0.0  
 **Tipo:** General

@@ -69,8 +69,21 @@ class TraceEmitter:
             "request_id": self._state.request_id,
             "query": self._state.query,
             "stop_reason": self._state.stop_reason,
+            "stop_reason_canonical": self._state.stop_reason_canonical,
             "plan": self._state.plan.model_dump(),
             "budget": asdict(self._state.budget),
+            "execution_state": (
+                self._state.execution_state.to_dict()
+                if self._state.execution_state is not None
+                else {}
+            ),
+            "runtime_state": (
+                self._state.runtime_state.to_dict()
+                if self._state.runtime_state is not None
+                else {}
+            ),
+            "history": [item.to_dict() for item in self._state.history],
+            "evaluations": list(self._state.evaluations),
             "replans_used": self._state.replans_used,
             "trace": [asdict(item) for item in self._state.execution_trace],
             "final_answer": self._state.final_answer,

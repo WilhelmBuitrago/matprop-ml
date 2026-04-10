@@ -12,6 +12,7 @@ from typing import Any, Iterator
 import requests
 
 from .entry_policy import EntryPolicyV4
+from .failure_policy import handle_evaluator_failure
 from .loop import run_loop
 from .model_io import clean_model_response, extract_model_text, messages_to_history
 from .planner import DeepSeekOneShotPlanner, PlannerOutcome
@@ -79,8 +80,14 @@ class PlannedRuntimeV4:
             },
         )
         if planner_outcome.plan is None:
-            state.stop_reason = planner_outcome.fallback_reason or "planner_failed"
+            if planner_outcome.fallback_reason == "invalid_plan":
+                state.set_stop_reason("invalid_plan")
+            else:
+                state.set_stop_reason("planner_failed")
             return state, emitter, planner_outcome
+
+        if planner_outcome.fallback_reason == "invalid_plan":
+            state.constraints["initial_plan_fallback_reason"] = "invalid_plan"
 
         state.plan = planner_outcome.plan
         asyncio.run(
@@ -115,7 +122,17 @@ class PlannedRuntimeV4:
         summary = {
             "query": state.query,
             "stop_reason": state.stop_reason,
+            "stop_reason_canonical": state.stop_reason_canonical,
             "plan": state.plan.model_dump(),
+            "execution_state": (
+                state.execution_state.to_dict() if state.execution_state else {}
+            ),
+            "runtime_state": (
+                state.runtime_state.to_dict() if state.runtime_state else {}
+            ),
+            "history": [item.to_dict() for item in state.history],
+            "evaluations": list(state.evaluations),
+            "final_answer": state.final_answer,
             "materials": material_rows,
             "constraints": state.constraints,
             "missing_properties": state.missing_properties,
@@ -132,6 +149,11 @@ class PlannedRuntimeV4:
             ],
         }
         return json.dumps(summary, ensure_ascii=True)
+
+    def build_query_only_context(self, state: AgentState) -> str:
+        return json.dumps(
+            {"query": state.query, "mode": "query_only"}, ensure_ascii=True
+        )
 
 
 class PlannedRuntimeV4Service:
@@ -170,12 +192,22 @@ class PlannedRuntimeV4Service:
         )
 
         if planner_outcome.plan is None and not state.stop_reason:
-            state.stop_reason = planner_outcome.fallback_reason or "planner_failed"
+            if planner_outcome.fallback_reason == "invalid_plan":
+                state.set_stop_reason("invalid_plan")
+            else:
+                state.set_stop_reason("planner_failed")
 
         context = self.runtime.build_context(state)
+        final_context = context
+        if state.stop_reason_canonical == "evaluator_failed":
+            mode = handle_evaluator_failure(state.history)
+            if mode == "final_without_context":
+                final_context = self.runtime.build_query_only_context(state)
+            state.constraints["evaluator_failure_mode"] = mode
+
         state.final_answer = self._final_model_call_v4(
             query=state.query,
-            context=context,
+            context=final_context,
             temperature=request.temperature,
             max_tokens=request.max_tokens_for_response,
         )
@@ -188,7 +220,7 @@ class PlannedRuntimeV4Service:
         )
         return self._build_response(
             state,
-            context=context,
+            context=final_context,
             planner_fallback_reason=planner_outcome.fallback_reason,
         )
 
@@ -211,18 +243,28 @@ class PlannedRuntimeV4Service:
         )
 
         if planner_outcome.plan is None and not state.stop_reason:
-            state.stop_reason = planner_outcome.fallback_reason or "planner_failed"
+            if planner_outcome.fallback_reason == "invalid_plan":
+                state.set_stop_reason("invalid_plan")
+            else:
+                state.set_stop_reason("planner_failed")
 
         context = self.runtime.build_context(state)
+        final_context = context
+        if state.stop_reason_canonical == "evaluator_failed":
+            mode = handle_evaluator_failure(state.history)
+            if mode == "final_without_context":
+                final_context = self.runtime.build_query_only_context(state)
+            state.constraints["evaluator_failure_mode"] = mode
+
         state.final_answer = self._final_model_call_v4(
             query=state.query,
-            context=context,
+            context=final_context,
             temperature=request.temperature,
             max_tokens=request.max_tokens_for_response,
         )
         response = self._build_response(
             state,
-            context=context,
+            context=final_context,
             planner_fallback_reason=planner_outcome.fallback_reason,
         )
         asyncio.run(
@@ -296,11 +338,20 @@ class PlannedRuntimeV4Service:
             "iterations_count": state.budget.iterations_used,
             "tool_calls_count": state.budget.tool_calls_used,
             "stop_reason": state.stop_reason,
+            "stop_reason_canonical": state.stop_reason_canonical,
+            "stop_reason_legacy": state.stop_reason,
             "elapsed_ms": state.budget.elapsed_ms(),
             "materials_found": len(state.hypotheses),
             "documents_found": len(state.constraints.get("documents", [])),
             "replans_used": state.replans_used,
             "plan_status": state.plan.status,
+            "execution_state": (
+                state.execution_state.to_dict() if state.execution_state else {}
+            ),
+            "runtime_state": (
+                state.runtime_state.to_dict() if state.runtime_state else {}
+            ),
+            "evaluations": list(state.evaluations),
             "execution_trace": [asdict(item) for item in state.execution_trace],
         }
         if planner_fallback_reason:
