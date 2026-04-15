@@ -508,6 +508,131 @@ Trace persistido `{AGENT_TRACE_DIR}/{request_id}.json` incluye:
 - Evaluator: `mode=evaluate`.
 - Modelo de control: `deepseek-r1:8b` (via env `AGENT_PLANNING_EVALUATOR_MODEL` con fallback planner/evaluator model vars).
 
-**Ultima actualizacion:** Abril 9, 2026
-**Version documento:** v1.0.0
+## 12. Verificacion contra Plan Maestro v4 -> v4.1
+
+Esta seccion valida el estado real implementado en codigo contra el blueprint solicitado.
+
+### 12.1 Mapeo de rutas del blueprint vs codigo real
+
+El blueprint usa prefijo conceptual `src/core/...`; la implementacion real vive en `src/api/v4/...` y `src/api/...`.
+
+- `src/core/state/execution_state.py` -> `src/api/v4/execution_state.py`
+- `src/core/state/runtime_state.py` -> `src/api/v4/runtime_state.py`
+- `src/core/history/history_item.py` -> `src/api/v4/history_item.py`
+- `src/core/history/truncation.py` -> `src/api/v4/truncation.py`
+- `src/core/planner/plan_models.py` -> `src/api/v4/contracts.py` (`Plan`, `PlanStep`)
+- `src/core/planner/plan_validator.py` -> `src/api/v4/plan_validator.py`
+- `src/core/evaluator/failure_policy.py` -> `src/api/v4/failure_policy.py`
+- `src/core/constants.py` -> `src/api/v4/constants.py`
+
+### 12.2 Matriz de cumplimiento (Plan Maestro)
+
+1. **State layer (ExecutionState/RuntimeState):** Implementado.
+   - Evidencia: `src/api/v4/execution_state.py`, `src/api/v4/runtime_state.py`, sincronizacion en `src/api/v4/state.py`.
+
+2. **History tipado + evaluator fuera de history:** Implementado.
+   - Evidencia: `HISTORY_TYPES` en `src/api/v4/history_item.py`; evaluator no agrega tipo propio, solo consume `HistoryItem`.
+
+3. **Truncamiento determinista:** Implementado.
+   - Evidencia: `truncate_history(...)` en `src/api/v4/truncation.py`, uso en `LoopEvaluatorV4.build_history(...)`.
+
+4. **Plan contract + validacion fuerte + fallback:** Implementado.
+   - Evidencia: `is_plan_coherent(...)` y `build_minimal_plan(...)` en `src/api/v4/plan_validator.py`; fallback en `src/api/v4/planner.py`.
+
+5. **Tool execution validation input/output + fail rule:** Implementado.
+   - Evidencia: `_execute_tool(...)` en `src/api/v4/loop.py` con `validate_input`, `validate_output` y `validate_tool_output`; stop canonical `tool_validation_failed`.
+
+6. **Evaluator contract + failure policy:** Implementado.
+   - Evidencia: `EvaluationResult` en `src/api/v4/contracts.py`; `handle_evaluator_failure(...)` en `src/api/v4/failure_policy.py`; uso en `src/api/v4/service.py`.
+
+7. **Loop order and formal branching:** Implementado.
+   - Evidencia: `run_loop(...)` en `src/api/v4/loop.py` sigue el orden presupuesto -> step -> validacion -> estado -> evaluator -> branching.
+
+8. **Global stop reasons enum:** Implementado.
+   - Evidencia: `STOP_REASONS` en `src/api/v4/constants.py`.
+   - Nota: incluye razones transicionales adicionales (`plan_exhausted`, `precondition_failed`, `planner_failed`, `controlled_failure`) para compatibilidad operativa.
+
+9. **Budget limits enforcement:** Implementado.
+   - Evidencia: checks `max_iterations`, `max_tool_calls`, `max_wall_time_ms` en `src/api/v4/loop.py`.
+
+10. **Trace obligatorio y reproducible:** Implementado.
+    - Evidencia: persistencia JSON en `src/api/v4/trace.py` con `query`, `plan`, `execution_state`, `runtime_state`, `history`, `evaluations`, `stop_reason`, `final_answer`.
+
+11. **Integracion con agents (mode plan/evaluate):** Implementado.
+    - Evidencia: payload `mode="plan"` en `src/api/v4/planner.py` y `mode="evaluate"` en `src/api/v4/evaluator.py`.
+
+12. **Testing obligatorio (unit + integration):** Implementado.
+    - Evidencia unitaria: `src/tests/test_plan_validator.py`, `src/tests/test_tool_validator.py`, `src/tests/test_evaluator_failure_policy.py`, `src/tests/test_truncation.py`.
+    - Evidencia integracion minima: `src/tests/test_integration/test_v41_hardening_paths.py` cubre plan valido, invalid_plan fallback, evaluator failure, tool failure, max_iterations.
+
+13. **Extensiones futuras no implementadas:** Cumplido (no implementadas).
+
+14. **Criterios de aceptacion de determinismo/estado/fallback:** Sustancialmente implementados en runtime v4.1.
+
+### 12.3 Desviaciones detectadas del blueprint literal
+
+- **Convencion de rutas:** El sistema usa `src/api/v4` en lugar de `src/core`.
+- **STOP_REASONS:** Se mantienen razones extra de transicion por compatibilidad, ademas del subset minimo del blueprint.
+- **CHANGELOG.md global (obligatorio en blueprint):** Implementado en raiz del repositorio (`CHANGELOG.md`).
+
+## 13. Delta Priority 1 Hardening (seguridad y observabilidad)
+
+Este delta corresponde al plan `docs/superpowers/plans/2026-04-14-agent-core-priority1-hardening.md`.
+
+### 13.1 Seguridad de endpoint
+- Modulo: `src/api/security.py`
+- Contratos:
+  - `AGENT_AUTH_MODE` en `{disabled, api_key}`.
+  - `AGENT_API_KEY` requerido en modo `api_key`.
+  - `AGENT_API_KEY_HEADER` configurable (default `X-API-Key`).
+- Rate limiting in-memory (sliding window):
+  - `AGENT_RATE_LIMIT_ENABLED`
+  - `AGENT_RATE_LIMIT_MAX_REQUESTS`
+  - `AGENT_RATE_LIMIT_WINDOW_SECONDS`
+- Enforcement en endpoint: `Depends(enforce_request_security)` en `src/api/v4/router.py`.
+
+### 13.2 Hardening de request contract
+- Archivo: `src/api/v4/scheme.py`
+- Cambios:
+  - `query` 1..10000 + normalizacion `strip()` + rechazo de blanco.
+  - `temperature` 0.0..2.0.
+  - `max_tokens_for_response` 32..4096.
+
+### 13.3 Logging estructurado y correlacion
+- Nuevo modulo: `src/infrastructure/logging.py`
+  - `JsonFormatter`, `RequestIdFilter`, `configure_logging()`, `set_request_id()/reset_request_id()`.
+- Integracion HTTP middleware: `src/api/app.py`
+  - Propaga/genera `X-Request-ID`.
+  - Log de ciclo request/response con contexto.
+- Integracion runtime core:
+  - `src/api/v4/service.py`
+  - `src/api/v4/loop.py`
+  - `src/api/v4/planner.py`
+  - `src/api/v4/evaluator.py`
+
+### 13.4 Contrato operativo de entorno y deps
+- `.env.example` actualizado con variables de auth/rate-limit/log.
+- `requirements.txt` pinneado en dependencias criticas.
+- Documentacion general y README alineados con hardening minimo.
+
+### 13.5 Cobertura de pruebas agregada para hardening
+- `src/tests/test_security_env_contract.py`
+- `src/tests/test_request_validation.py`
+- `src/tests/test_api_security.py`
+- `src/tests/test_core_logging.py`
+- `src/tests/test_security_docs_contract.py`
+- `src/tests/test_requirements_pinned.py`
+
+## 14. Estado operativo consolidado
+
+El runtime actual queda documentado como `v4.1` endurecido, con:
+- control determinista de loop,
+- contratos tipados de estado,
+- fallback formal de evaluator,
+- validacion de plan/tools,
+- trazabilidad reproducible,
+- y hardening Priority 1 de seguridad/observabilidad.
+
+**Ultima actualizacion:** Abril 15, 2026
+**Version documento:** v1.1.0
 **Tipo:** Tecnico operativo

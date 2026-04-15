@@ -343,6 +343,12 @@ Para entornos de producción (fuera del scope de este README), considera:
 
 Consulta `TECHNICAL_DOCUMENTATION_AGENT_CORE.md` para detalles.
 
+### Seguridad mínima recomendada (Agent Core)
+
+- Activar `AGENT_AUTH_MODE=api_key` en entornos no locales.
+- Configurar rate limit con `AGENT_RATE_LIMIT_ENABLED`, `AGENT_RATE_LIMIT_MAX_REQUESTS` y `AGENT_RATE_LIMIT_WINDOW_SECONDS`.
+- No versionar secretos en `.env`; usar variables de entorno del runtime.
+
 ---
 
 ## 🛣️ Roadmap

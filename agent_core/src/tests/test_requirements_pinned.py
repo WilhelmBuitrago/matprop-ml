@@ -1,0 +1,22 @@
+from pathlib import Path
+
+
+AGENT_CORE_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_critical_dependencies_are_pinned():
+    content = (AGENT_CORE_ROOT / "requirements.txt").read_text(encoding="utf-8")
+    expected = [
+        "fastapi==0.115.11",
+        "uvicorn[standard]==0.34.0",
+        "requests==2.32.3",
+        "pydantic==2.10.6",
+        "pymatgen==2024.10.29",
+        "mp_api==0.45.15",
+        "numpy<2.0.0",
+        "PyMuPDF==1.24.0",
+        "aiofiles==24.1.0",
+    ]
+
+    for item in expected:
+        assert item in content

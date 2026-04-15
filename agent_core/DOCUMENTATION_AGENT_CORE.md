@@ -23,11 +23,17 @@ Contrato de request:
 - `query: str`
 - `stream: bool = false`
 - `temperature: float = 0.2`
-- `max_tokens_for_response: int = 512`
+- `max_tokens_for_response: int = 512` (rango: 32..4096)
 - `max_iterations: int = 8`
 - `max_tool_calls: int = 8`
 - `max_context_tokens: int = 2048`
 - `max_wall_time_ms: int | null = null`
+
+Validaciones de request (v4.1 + hardening):
+- `query` se normaliza con `strip()` y rechaza blanco.
+- `query` tiene limite de longitud: 1..10000.
+- `temperature` acotada a `0.0..2.0`.
+- `max_tokens_for_response` acotado a `32..4096`.
 
 Regla de wall-time:
 - Si `max_wall_time_ms` es `null`, no hay corte por tiempo.
@@ -110,6 +116,19 @@ curl -X POST http://localhost:8004/v4/completions \
 - API publica actual: `v4`
 - La implementacion expone una sola version publica activa.
 
+## Seguridad Operacional (v4)
+
+- `AGENT_AUTH_MODE=api_key` activa autenticacion por header en `/v4/completions`.
+- Header por defecto: `X-API-Key` (configurable con `AGENT_API_KEY_HEADER`).
+- Rate limiting configurable con:
+  - `AGENT_RATE_LIMIT_ENABLED`
+  - `AGENT_RATE_LIMIT_MAX_REQUESTS`
+  - `AGENT_RATE_LIMIT_WINDOW_SECONDS`
+- Seguridad se aplica por dependencia de endpoint (`Depends(enforce_request_security)`).
+- Logging estructurado JSON con `request_id` propagado por header `X-Request-ID`.
+- Nunca versionar `.env` con secretos reales.
+- Rotar cualquier API key previamente expuesta.
+
 ## 11. Cambios operativos v1.0.0 (Major)
 
 ### 11.1 Estado tipado
@@ -158,6 +177,18 @@ Cada trace JSON ahora incluye, como minimo:
 - `stop_reason`
 - `final_answer`
 
-**Ultima actualizacion:** Abril 9, 2026  
-**Version documento:** v1.0.0  
+## 12. Alineacion con plan de hardening Priority 1
+
+Plan de referencia aplicado:
+- `docs/superpowers/plans/2026-04-14-agent-core-priority1-hardening.md`
+
+Estado documentado en este servicio:
+- Contrato de seguridad: auth por API key + rate limiting configurable.
+- Endurecimiento de request contract (`query`, `temperature`, `max_tokens_for_response`).
+- Logging estructurado en runtime y middleware HTTP con correlacion por request_id.
+- Variables de entorno de seguridad/logging en `.env.example`.
+- Dependencias pinneadas en `requirements.txt`.
+
+**Ultima actualizacion:** Abril 15, 2026  
+**Version documento:** v1.1.0  
 **Tipo:** General

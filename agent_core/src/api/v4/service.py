@@ -5,6 +5,7 @@ from pathlib import Path
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import time
 from typing import Any, Iterator
@@ -28,6 +29,8 @@ FINAL_SYSTEM_PROMPT = (
     "You are a scientific assistant specialized in materials science. "
     "Answer the user query using only the provided context and clearly state uncertainty when evidence is partial."
 )
+
+logger = logging.getLogger(__name__)
 
 
 class PlannedRuntimeV4:
@@ -179,6 +182,13 @@ class PlannedRuntimeV4Service:
 
     def chat(self, request: CompletionRequestV4) -> CompletionResponseV4:
         request_id = self._generate_request_id(request.query)
+        logger.info(
+            "chat_v4_start request_id=%s query_len=%d max_iterations=%d max_tool_calls=%d",
+            request_id,
+            len(request.query),
+            request.max_iterations,
+            request.max_tool_calls,
+        )
         state, emitter, planner_outcome = self.runtime.execute(
             request_id=request_id,
             query=request.query,
@@ -218,6 +228,13 @@ class PlannedRuntimeV4Service:
                 trace="Final answer generated",
             )
         )
+        logger.info(
+            "chat_v4_end request_id=%s stop_reason=%s iterations=%d tool_calls=%d",
+            state.request_id,
+            state.stop_reason_canonical,
+            state.budget.iterations_used,
+            state.budget.tool_calls_used,
+        )
         return self._build_response(
             state,
             context=final_context,
@@ -226,6 +243,11 @@ class PlannedRuntimeV4Service:
 
     def stream_chat_events(self, request: CompletionRequestV4) -> Iterator[str]:
         request_id = self._generate_request_id(request.query)
+        logger.info(
+            "chat_v4_stream_start request_id=%s query_len=%d",
+            request_id,
+            len(request.query),
+        )
         state, emitter, planner_outcome = self.runtime.execute(
             request_id=request_id,
             query=request.query,
@@ -277,6 +299,14 @@ class PlannedRuntimeV4Service:
 
         for event in emitter.sse_events():
             yield event
+
+        logger.info(
+            "chat_v4_stream_end request_id=%s stop_reason=%s iterations=%d tool_calls=%d",
+            state.request_id,
+            state.stop_reason_canonical,
+            state.budget.iterations_used,
+            state.budget.tool_calls_used,
+        )
 
     def _generate_request_id(self, query: str) -> str:
         return hashlib.md5(f"{query}-{time.time_ns()}".encode("utf-8")).hexdigest()

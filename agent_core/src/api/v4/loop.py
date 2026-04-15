@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 import asyncio
+import logging
 import re
 
 from .contracts import ToolResult
@@ -12,6 +13,7 @@ from tools.validator import validate_tool_output
 
 
 MAX_REPLANS = 2
+logger = logging.getLogger(__name__)
 
 
 def now_ms() -> int:
@@ -43,8 +45,20 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
         )
 
     while True:
+        logger.info(
+            "loop_iteration_start request_id=%s cursor=%d iteration_used=%d tool_calls_used=%d",
+            state.request_id,
+            state.plan.cursor,
+            state.budget.iterations_used,
+            state.budget.tool_calls_used,
+        )
         if state.budget.iterations_used >= state.budget.max_iterations:
             state.set_stop_reason("max_iterations")
+            logger.warning(
+                "loop_stop request_id=%s reason=%s",
+                state.request_id,
+                state.stop_reason_canonical,
+            )
             await emitter.emit(
                 "stop",
                 {"reason": state.stop_reason},
@@ -54,6 +68,11 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
 
         if state.budget.tool_calls_used >= state.budget.max_tool_calls:
             state.set_stop_reason("max_tool_calls")
+            logger.warning(
+                "loop_stop request_id=%s reason=%s",
+                state.request_id,
+                state.stop_reason_canonical,
+            )
             await emitter.emit(
                 "stop",
                 {"reason": state.stop_reason},
@@ -65,6 +84,11 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
             elapsed = now_ms() - int(state.budget.started_at_ms or now_ms())
             if elapsed > state.budget.max_wall_time_ms:
                 state.set_stop_reason("timeout")
+                logger.warning(
+                    "loop_stop request_id=%s reason=%s",
+                    state.request_id,
+                    state.stop_reason_canonical,
+                )
                 await emitter.emit(
                     "stop",
                     {"reason": state.stop_reason},
@@ -75,6 +99,11 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
         if state.plan.cursor >= len(state.plan.steps):
             state.set_stop_reason("plan_exhausted")
             state.plan.status = "exhausted"
+            logger.warning(
+                "loop_stop request_id=%s reason=%s",
+                state.request_id,
+                state.stop_reason_canonical,
+            )
             await emitter.emit(
                 "stop", {"reason": state.stop_reason}, trace="Plan exhausted"
             )
@@ -106,6 +135,12 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
         if not registry.can_run(step.tool, state):
             state.runtime_state.mark_step_failed(step_idx)
             state.set_stop_reason("precondition_failed")
+            logger.warning(
+                "loop_stop request_id=%s reason=%s tool=%s",
+                state.request_id,
+                state.stop_reason_canonical,
+                step.tool,
+            )
             await emitter.emit(
                 "stop",
                 {"reason": state.stop_reason, "tool": step.tool},
@@ -145,6 +180,13 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
         if result.status != "success":
             state.runtime_state.mark_step_failed(step_idx)
             state.set_stop_reason("tool_validation_failed")
+            logger.warning(
+                "loop_stop request_id=%s reason=%s tool=%s error=%s",
+                state.request_id,
+                state.stop_reason_canonical,
+                step.tool,
+                result.error_message,
+            )
             await emitter.emit(
                 "stop",
                 {
@@ -164,6 +206,11 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
             feedback = await evaluator.evaluate(state)
         except Exception as exc:
             state.set_stop_reason("evaluator_failed")
+            logger.exception(
+                "loop_stop request_id=%s reason=%s",
+                state.request_id,
+                state.stop_reason_canonical,
+            )
             await emitter.emit(
                 "stop",
                 {"reason": state.stop_reason, "error": str(exc)},
@@ -184,6 +231,11 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
         if feedback.stop and feedback.constraints_ok:
             state.set_stop_reason("completed")
             state.plan.status = "completed"
+            logger.info(
+                "loop_stop request_id=%s reason=%s",
+                state.request_id,
+                state.stop_reason_canonical,
+            )
             await emitter.emit(
                 "stop", {"reason": state.stop_reason}, trace="Evaluator decided to stop"
             )
@@ -203,6 +255,12 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
             )
             if planner_outcome.plan is None:
                 state.set_stop_reason("planner_failed")
+                logger.warning(
+                    "loop_stop request_id=%s reason=%s fallback=%s",
+                    state.request_id,
+                    state.stop_reason_canonical,
+                    planner_outcome.fallback_reason,
+                )
                 await emitter.emit(
                     "stop",
                     {

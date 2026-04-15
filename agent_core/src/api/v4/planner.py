@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+import logging
 import os
 import re
 
@@ -15,6 +16,9 @@ from .plan_validator import (
     is_plan_coherent,
     validate_step_input,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -59,6 +63,11 @@ class DeepSeekOneShotPlanner:
         feedback: str | None = None,
     ) -> PlannerOutcome:
         """Build a plan from query/context without evaluating loop outcomes."""
+        logger.info(
+            "planner_build_plan_start query_len=%d tools=%d",
+            len(query),
+            len(tool_catalog),
+        )
         available_tools = {
             str(item.get("name", "")).strip()
             for item in tool_catalog
@@ -87,12 +96,14 @@ class DeepSeekOneShotPlanner:
             response.raise_for_status()
             parsed = response.json()
         except Exception:
+            logger.exception("planner_fallback reason=invalid_plan")
             return PlannerOutcome(
                 plan=build_minimal_plan(query, tool_catalog),
                 fallback_reason="invalid_plan",
             )
 
         if not isinstance(parsed, dict):
+            logger.warning("planner_fallback reason=invalid_plan")
             return PlannerOutcome(
                 plan=build_minimal_plan(query, tool_catalog),
                 fallback_reason="invalid_plan",
@@ -104,6 +115,7 @@ class DeepSeekOneShotPlanner:
             query=query,
         )
         if not steps:
+            logger.warning("planner_fallback reason=invalid_plan")
             return PlannerOutcome(
                 plan=build_minimal_plan(query, tool_catalog),
                 fallback_reason="invalid_plan",
@@ -115,11 +127,13 @@ class DeepSeekOneShotPlanner:
             available_tools=available_tools,
             dependency_graph=DEFAULT_DEPENDENCY_GRAPH,
         ):
+            logger.warning("planner_fallback reason=invalid_plan")
             return PlannerOutcome(
                 plan=build_minimal_plan(query, tool_catalog),
                 fallback_reason="invalid_plan",
             )
 
+        logger.info("planner_build_plan_success steps=%d", len(steps))
         return PlannerOutcome(plan=plan, fallback_reason=None)
 
     def _normalize_steps(

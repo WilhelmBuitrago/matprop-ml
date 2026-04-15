@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 import asyncio
 import json
+import logging
 import os
 
 import requests
@@ -17,6 +18,8 @@ EVALUATOR_SYSTEM_MESSAGE = (
     "You are an external evaluator controller. "
     "You are not a conversational actor and must not produce user-facing answers."
 )
+
+logger = logging.getLogger(__name__)
 
 
 class LoopEvaluatorV4:
@@ -54,6 +57,11 @@ class LoopEvaluatorV4:
         return await asyncio.to_thread(self._evaluate_sync, state)
 
     def _evaluate_sync(self, state: AgentState) -> EvaluationResult:
+        logger.info(
+            "evaluator_start request_id=%s cursor=%d",
+            state.request_id,
+            state.plan.cursor,
+        )
         state.sync_execution_state()
         state.refresh_runtime_counts()
 
@@ -95,6 +103,7 @@ class LoopEvaluatorV4:
                 reason=feedback or "continue_with_current_plan",
             )
         except Exception as exc:
+            logger.exception("evaluator_failed request_id=%s", state.request_id)
             raise RuntimeError(f"evaluator_failed: {exc}") from exc
 
     def build_history(self, state: AgentState) -> list[dict[str, str]]:

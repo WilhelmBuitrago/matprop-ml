@@ -131,6 +131,17 @@ def docker_env_for_tools(monkeypatch):
     }
 
 
+@pytest.fixture(autouse=True)
+def reset_security_env(monkeypatch):
+    monkeypatch.delenv("AGENT_AUTH_MODE", raising=False)
+    monkeypatch.delenv("AGENT_API_KEY", raising=False)
+    monkeypatch.delenv("AGENT_API_KEY_HEADER", raising=False)
+    monkeypatch.delenv("AGENT_RATE_LIMIT_ENABLED", raising=False)
+    monkeypatch.delenv("AGENT_RATE_LIMIT_MAX_REQUESTS", raising=False)
+    monkeypatch.delenv("AGENT_RATE_LIMIT_WINDOW_SECONDS", raising=False)
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+
+
 @pytest.fixture
 def tool_test_logger(caplog):
     """Capture informative logs for comprehensive tool tests."""
