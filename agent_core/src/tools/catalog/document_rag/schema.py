@@ -85,7 +85,34 @@ OUTPUT_SCHEMA = {
                 ],
                 "additionalProperties": False,
             },
-        }
+        },
+        "source": {"type": "string", "enum": ["rag"]},
+        "trace_refs": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "confidence_signals": {
+            "type": "object",
+            "properties": {
+                "avg_similarity": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                },
+                "agreement": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                },
+                "coverage": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                },
+            },
+            "required": ["avg_similarity", "agreement", "coverage"],
+            "additionalProperties": False,
+        },
     },
     "required": ["results"],
     "additionalProperties": False,

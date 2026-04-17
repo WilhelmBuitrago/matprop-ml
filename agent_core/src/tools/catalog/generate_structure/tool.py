@@ -113,6 +113,24 @@ class GenerateCrystalStructureTool(ToolContract):
                 "required": ["is_valid", "errors", "warnings"],
                 "additionalProperties": False,
             },
+            "source": {"type": "string", "enum": ["llm"]},
+            "confidence_signals": {
+                "type": "object",
+                "properties": {
+                    "structure_consistency": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                    },
+                    "low_entropy": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                    },
+                },
+                "required": ["structure_consistency", "low_entropy"],
+                "additionalProperties": False,
+            },
             "debug": {
                 "type": "object",
                 "properties": {
@@ -148,6 +166,9 @@ class GenerateCrystalStructureTool(ToolContract):
                 payload={},
                 error_code="VALIDATION_ERROR",
                 error_detail="query is required",
+                source="llm",
+                is_synthetic=True,
+                trace="generate_crystal_structure:empty_query",
             )
 
         output_format = str(kwargs.get("format", "cif")).lower()
@@ -252,6 +273,9 @@ class GenerateCrystalStructureTool(ToolContract):
                     },
                     error_code="VALIDATION_ERROR",
                     error_detail="generated structure did not pass validation",
+                    source="llm",
+                    is_synthetic=True,
+                    trace="generate_crystal_structure:validation_failed",
                 )
 
             cif_text = structure_to_cif(parsed.structure)
@@ -285,12 +309,36 @@ class GenerateCrystalStructureTool(ToolContract):
             elif output_format == "json":
                 payload["cif"] = ""
 
+            atom_count = len(parsed.atoms)
+            warning_count = len(validation.warnings)
+            errors_count = len(validation.errors)
+            structure_consistency = 1.0 if validation.is_valid else 0.4
+            low_entropy = 1.0 if atom_count > 0 else 0.5
+            payload["source"] = "llm"
+            payload["confidence_signals"] = {
+                "structure_consistency": structure_consistency,
+                "low_entropy": low_entropy,
+            }
+
             logger.info(
                 "generate_structure success output_format=%s warnings=%d",
                 output_format,
                 len(validation.warnings),
             )
-            return ToolResult(status="success", payload=payload)
+            return ToolResult(
+                status="success",
+                payload=payload,
+                source="llm",
+                is_synthetic=True,
+                trace=(
+                    f"formula={crystal_spec.formula or 'unknown'};"
+                    f"atoms={atom_count};warnings={warning_count};errors={errors_count}"
+                ),
+                confidence_signals={
+                    "structure_consistency": structure_consistency,
+                    "low_entropy": low_entropy,
+                },
+            )
 
         except ValueError as exc:
             logger.warning("generate_structure parsing_error=%s", exc)
@@ -299,6 +347,9 @@ class GenerateCrystalStructureTool(ToolContract):
                 payload={},
                 error_code="PARSING_ERROR",
                 error_detail=str(exc),
+                source="llm",
+                is_synthetic=True,
+                trace="generate_crystal_structure:parsing_error",
             )
         except Exception as exc:  # pragma: no cover
             logger.exception("generate_structure unexpected_error")
@@ -307,6 +358,9 @@ class GenerateCrystalStructureTool(ToolContract):
                 payload={},
                 error_code="GENERATION_ERROR",
                 error_detail=str(exc),
+                source="llm",
+                is_synthetic=True,
+                trace="generate_crystal_structure:unexpected_error",
             )
 
     @staticmethod

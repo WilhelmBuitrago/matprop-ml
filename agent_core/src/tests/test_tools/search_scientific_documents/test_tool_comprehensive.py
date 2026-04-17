@@ -229,7 +229,7 @@ def test_execute_returns_empty_success_when_all_documents_fail_normalization(
     result = tool.execute(query="band gap", providers=["semantic_scholar"])
 
     assert result.status == "success"
-    assert result.payload == {"documents": [], "count": 0}
+    assert result.payload == {"documents": [], "count": 0, "source": "paper"}
 
 
 def test_init_logs_warning_when_embeddings_client_unavailable(

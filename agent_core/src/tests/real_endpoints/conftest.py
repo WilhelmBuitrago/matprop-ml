@@ -5,4 +5,5 @@ _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 
-pytest_plugins = ["conftest_real", "conftest_report"]
+from conftest_real import *  # noqa: F401,F403
+from conftest_report import *  # noqa: F401,F403

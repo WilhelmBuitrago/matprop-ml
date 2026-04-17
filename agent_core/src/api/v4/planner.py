@@ -9,10 +9,10 @@ import re
 import requests
 
 from .contracts import Plan, PlanStep
+from .context_budget import ContextBudget
 from .plan_validator import (
     DEFAULT_DEPENDENCY_GRAPH,
     MAX_PLAN_STEPS,
-    build_minimal_plan,
     is_plan_coherent,
     validate_step_input,
 )
@@ -41,6 +41,7 @@ class DeepSeekOneShotPlanner:
         model_name: str | None = None,
         max_steps: int = 4,
         timeout_seconds: int = 45,
+        context_budget: ContextBudget | None = None,
     ) -> None:
         self._agents_url = (
             agents_url or os.getenv("AGENTS_URL", "http://agents:8003")
@@ -52,6 +53,8 @@ class DeepSeekOneShotPlanner:
         )
         self._max_steps = min(MAX_PLAN_STEPS, max_steps)
         self._timeout_seconds = timeout_seconds
+        configured_tokens = int(os.getenv("AGENT_HISTORY_MAX_TOKENS", "2048"))
+        self._context_budget = context_budget or ContextBudget(configured_tokens)
 
     def build_plan(
         self,
@@ -68,6 +71,11 @@ class DeepSeekOneShotPlanner:
             len(query),
             len(tool_catalog),
         )
+        safe_query = self._context_budget.truncate_text(
+            query,
+            max_tokens=max(32, self._context_budget.max_tokens // 2),
+        )
+        safe_history = self._context_budget.truncate_messages(history or [])
         available_tools = {
             str(item.get("name", "")).strip()
             for item in tool_catalog
@@ -76,9 +84,9 @@ class DeepSeekOneShotPlanner:
 
         payload = {
             "mode": "plan",
-            "query": query,
+            "query": safe_query,
             "model_name": self._model_name,
-            "history": history or [],
+            "history": safe_history,
             "tools_available": tool_catalog,
             "state": state or {},
             "plan": {},
@@ -96,18 +104,12 @@ class DeepSeekOneShotPlanner:
             response.raise_for_status()
             parsed = response.json()
         except Exception:
-            logger.exception("planner_fallback reason=invalid_plan")
-            return PlannerOutcome(
-                plan=build_minimal_plan(query, tool_catalog),
-                fallback_reason="invalid_plan",
-            )
+            logger.exception("planner_failed request_query_len=%d", len(query))
+            return PlannerOutcome(plan=None, fallback_reason="planner_failed")
 
         if not isinstance(parsed, dict):
             logger.warning("planner_fallback reason=invalid_plan")
-            return PlannerOutcome(
-                plan=build_minimal_plan(query, tool_catalog),
-                fallback_reason="invalid_plan",
-            )
+            return PlannerOutcome(plan=None, fallback_reason="invalid_plan")
 
         steps = self._normalize_steps(
             parsed=parsed,
@@ -116,10 +118,7 @@ class DeepSeekOneShotPlanner:
         )
         if not steps:
             logger.warning("planner_fallback reason=invalid_plan")
-            return PlannerOutcome(
-                plan=build_minimal_plan(query, tool_catalog),
-                fallback_reason="invalid_plan",
-            )
+            return PlannerOutcome(plan=None, fallback_reason="invalid_plan")
 
         plan = Plan(steps=steps, cursor=0, status="active")
         if not is_plan_coherent(
@@ -128,10 +127,7 @@ class DeepSeekOneShotPlanner:
             dependency_graph=DEFAULT_DEPENDENCY_GRAPH,
         ):
             logger.warning("planner_fallback reason=invalid_plan")
-            return PlannerOutcome(
-                plan=build_minimal_plan(query, tool_catalog),
-                fallback_reason="invalid_plan",
-            )
+            return PlannerOutcome(plan=None, fallback_reason="invalid_plan")
 
         logger.info("planner_build_plan_success steps=%d", len(steps))
         return PlannerOutcome(plan=plan, fallback_reason=None)

@@ -12,8 +12,10 @@ from typing import Any, Iterator
 
 import requests
 
+from .context_budget import ContextBudget
 from .entry_policy import EntryPolicyV4
 from .failure_policy import handle_evaluator_failure
+from .resilience_policy import ResiliencePolicy
 from .loop import run_loop
 from .model_io import clean_model_response, extract_model_text, messages_to_history
 from .planner import DeepSeekOneShotPlanner, PlannerOutcome
@@ -32,14 +34,14 @@ FINAL_SYSTEM_PROMPT = (
 
 logger = logging.getLogger(__name__)
 
+LEVEL3_FALLBACK_MODEL = "WilhelmBuitrago/llamat-3-chat-8b:Q5_K_M"
+
 
 class PlannedRuntimeV4:
     def __init__(self, *, trace_dir: Path):
         self.trace_dir = trace_dir
         self.trace_dir.mkdir(parents=True, exist_ok=True)
         self.entry_policy = EntryPolicyV4()
-        self.planner = DeepSeekOneShotPlanner()
-        self.evaluator = LoopEvaluatorV4()
 
     def execute(
         self,
@@ -47,9 +49,17 @@ class PlannedRuntimeV4:
         request_id: str,
         query: str,
         budget: BudgetState,
+        max_context_tokens: int,
         registry,
         stream: bool,
     ) -> tuple[AgentState, TraceEmitter, PlannerOutcome]:
+        context_budget = ContextBudget(max_tokens=max_context_tokens)
+        planner = DeepSeekOneShotPlanner(context_budget=context_budget)
+        evaluator = LoopEvaluatorV4(
+            context_budget=context_budget,
+            trace_dir=self.trace_dir,
+        )
+
         state = AgentState(
             request_id=request_id,
             query=query,
@@ -74,8 +84,13 @@ class PlannedRuntimeV4:
             ],
             "top_k": len(selected_tool_catalog),
         }
+        state.constraints["context_budget"] = {
+            "max_context_tokens": context_budget.max_tokens,
+        }
 
-        planner_outcome = self.planner.build_plan(
+        resilience_policy = ResiliencePolicy()
+
+        planner_outcome = planner.build_plan(
             query=query,
             tool_catalog=selected_tool_catalog,
             state={
@@ -83,22 +98,42 @@ class PlannedRuntimeV4:
             },
         )
         if planner_outcome.plan is None:
+            level2 = resilience_policy.level2_for_planner_failure(
+                query,
+                planner_outcome.fallback_reason or "planner_failed",
+            )
+            state.plan = self._build_level2_fallback_plan(
+                query=query,
+                selected_tool=str(
+                    level2.details.get(
+                        "selected_tool",
+                        "query_materials_database",
+                    )
+                ),
+            )
+            state.constraints["resilience_level"] = level2.level
+            state.constraints["resilience_action"] = level2.action
+            state.constraints["resilience_reason"] = level2.reason
+            state.constraints["resilience_details"] = dict(level2.details)
+            state.constraints["initial_plan_fallback_reason"] = (
+                planner_outcome.fallback_reason or "planner_failed"
+            )
+            planner_outcome = PlannerOutcome(
+                plan=state.plan,
+                fallback_reason=planner_outcome.fallback_reason,
+            )
+        else:
             if planner_outcome.fallback_reason == "invalid_plan":
-                state.set_stop_reason("invalid_plan")
-            else:
-                state.set_stop_reason("planner_failed")
-            return state, emitter, planner_outcome
+                state.constraints["initial_plan_fallback_reason"] = "invalid_plan"
 
-        if planner_outcome.fallback_reason == "invalid_plan":
-            state.constraints["initial_plan_fallback_reason"] = "invalid_plan"
+            state.plan = planner_outcome.plan
 
-        state.plan = planner_outcome.plan
         asyncio.run(
             run_loop(
                 state,
                 registry,
-                self.planner,
-                self.evaluator,
+                planner,
+                evaluator,
                 emitter,
                 selected_tool_catalog,
             )
@@ -158,6 +193,37 @@ class PlannedRuntimeV4:
             {"query": state.query, "mode": "query_only"}, ensure_ascii=True
         )
 
+    def _build_level2_fallback_plan(self, *, query: str, selected_tool: str) -> Plan:
+        if selected_tool == "document_rag":
+            return Plan(
+                steps=[
+                    {
+                        "tool": "search_scientific_documents",
+                        "target": query,
+                        "purpose": "Collect literature candidates for deterministic RAG fallback",
+                    },
+                    {
+                        "tool": "document_rag",
+                        "target": query,
+                        "purpose": "Extract evidence from retrieved papers in deterministic fallback",
+                    },
+                ],
+                cursor=0,
+                status="active",
+            )
+
+        return Plan(
+            steps=[
+                {
+                    "tool": "query_materials_database",
+                    "target": query,
+                    "purpose": "Deterministic property lookup fallback",
+                }
+            ],
+            cursor=0,
+            status="active",
+        )
+
 
 class PlannedRuntimeV4Service:
     """Public v4 completion service.
@@ -197,15 +263,10 @@ class PlannedRuntimeV4Service:
                 max_tool_calls=request.max_tool_calls,
                 max_wall_time_ms=request.max_wall_time_ms,
             ),
+            max_context_tokens=request.max_context_tokens,
             registry=TOOL_REGISTRY,
             stream=False,
         )
-
-        if planner_outcome.plan is None and not state.stop_reason:
-            if planner_outcome.fallback_reason == "invalid_plan":
-                state.set_stop_reason("invalid_plan")
-            else:
-                state.set_stop_reason("planner_failed")
 
         context = self.runtime.build_context(state)
         final_context = context
@@ -215,12 +276,35 @@ class PlannedRuntimeV4Service:
                 final_context = self.runtime.build_query_only_context(state)
             state.constraints["evaluator_failure_mode"] = mode
 
-        state.final_answer = self._final_model_call_v4(
+        fallback_details = state.constraints.get("resilience_details", {})
+        fallback_mode = state.constraints.get("resilience_action")
+        fallback_model = None
+        if fallback_mode == "final_model_direct_fallback" and isinstance(
+            fallback_details, dict
+        ):
+            fallback_model = str(
+                fallback_details.get("model") or LEVEL3_FALLBACK_MODEL
+            )
+
+        final_answer, final_error = self._final_model_call_v4(
             query=state.query,
             context=final_context,
             temperature=request.temperature,
             max_tokens=request.max_tokens_for_response,
+            model_name_override=fallback_model,
         )
+        if final_error:
+            level4 = ResiliencePolicy().level4_for_final_model_failure(final_error)
+            state.constraints["resilience_level"] = level4.level
+            state.constraints["resilience_action"] = level4.action
+            state.constraints["resilience_reason"] = level4.reason
+            state.constraints["resilience_details"] = dict(level4.details)
+            final_answer = (
+                "No puedo completar una respuesta confiable en este momento debido a una limitacion tecnica del modelo final. "
+                "Intenta nuevamente o reformula la consulta con mas contexto experimental."
+            )
+        state.final_answer = final_answer
+
         asyncio.run(
             emitter.emit(
                 "final",
@@ -239,6 +323,7 @@ class PlannedRuntimeV4Service:
             state,
             context=final_context,
             planner_fallback_reason=planner_outcome.fallback_reason,
+            max_context_tokens=request.max_context_tokens,
         )
 
     def stream_chat_events(self, request: CompletionRequestV4) -> Iterator[str]:
@@ -256,6 +341,7 @@ class PlannedRuntimeV4Service:
                 max_tool_calls=request.max_tool_calls,
                 max_wall_time_ms=request.max_wall_time_ms,
             ),
+            max_context_tokens=request.max_context_tokens,
             registry=TOOL_REGISTRY,
             stream=True,
         )
@@ -263,12 +349,6 @@ class PlannedRuntimeV4Service:
         yield self._format_sse(
             "start", {"request_id": state.request_id, "query": state.query}
         )
-
-        if planner_outcome.plan is None and not state.stop_reason:
-            if planner_outcome.fallback_reason == "invalid_plan":
-                state.set_stop_reason("invalid_plan")
-            else:
-                state.set_stop_reason("planner_failed")
 
         context = self.runtime.build_context(state)
         final_context = context
@@ -278,16 +358,40 @@ class PlannedRuntimeV4Service:
                 final_context = self.runtime.build_query_only_context(state)
             state.constraints["evaluator_failure_mode"] = mode
 
-        state.final_answer = self._final_model_call_v4(
+        fallback_details = state.constraints.get("resilience_details", {})
+        fallback_mode = state.constraints.get("resilience_action")
+        fallback_model = None
+        if fallback_mode == "final_model_direct_fallback" and isinstance(
+            fallback_details, dict
+        ):
+            fallback_model = str(
+                fallback_details.get("model") or LEVEL3_FALLBACK_MODEL
+            )
+
+        final_answer, final_error = self._final_model_call_v4(
             query=state.query,
             context=final_context,
             temperature=request.temperature,
             max_tokens=request.max_tokens_for_response,
+            model_name_override=fallback_model,
         )
+        if final_error:
+            level4 = ResiliencePolicy().level4_for_final_model_failure(final_error)
+            state.constraints["resilience_level"] = level4.level
+            state.constraints["resilience_action"] = level4.action
+            state.constraints["resilience_reason"] = level4.reason
+            state.constraints["resilience_details"] = dict(level4.details)
+            final_answer = (
+                "No puedo completar una respuesta confiable en este momento debido a una limitacion tecnica del modelo final. "
+                "Intenta nuevamente o reformula la consulta con mas contexto experimental."
+            )
+        state.final_answer = final_answer
+
         response = self._build_response(
             state,
             context=final_context,
             planner_fallback_reason=planner_outcome.fallback_reason,
+            max_context_tokens=request.max_context_tokens,
         )
         asyncio.run(
             emitter.emit(
@@ -318,17 +422,19 @@ class PlannedRuntimeV4Service:
         context: str,
         temperature: float,
         max_tokens: int,
-    ) -> str:
+        model_name_override: str | None = None,
+    ) -> tuple[str, str | None]:
         messages = [
             {"role": "system", "content": FINAL_SYSTEM_PROMPT},
             {"role": "user", "content": query},
             {"role": "assistant", "content": context},
         ]
+        model_name = model_name_override or self.model_name
         payload = {
             "history": messages_to_history(messages),
             "temperature": temperature,
             "max_tokens": max_tokens,
-            "model_name": self.model_name,
+            "model_name": model_name,
         }
 
         try:
@@ -340,9 +446,9 @@ class PlannedRuntimeV4Service:
             )
             response.raise_for_status()
             parsed = response.json()
-            return clean_model_response(extract_model_text(parsed))
+            return clean_model_response(extract_model_text(parsed)), None
         except Exception as exc:
-            return f"Planned runtime finished without final model answer: {exc}"
+            return "", str(exc)
 
     def _build_response(
         self,
@@ -350,16 +456,18 @@ class PlannedRuntimeV4Service:
         *,
         context: str,
         planner_fallback_reason: str | None,
+        max_context_tokens: int,
     ) -> CompletionResponseV4:
-        prompt_tokens = self._approximate_tokens(
+        token_budget = ContextBudget(max_tokens=max_context_tokens)
+        prompt_tokens = token_budget.estimate_text_tokens(
             state.query
-        ) + self._approximate_tokens(context)
-        completion_tokens = self._approximate_tokens(state.final_answer or "")
+        ) + token_budget.estimate_text_tokens(context)
+        completion_tokens = token_budget.estimate_text_tokens(state.final_answer or "")
         usage = {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
-            "context_tokens": self._approximate_tokens(context),
+            "context_tokens": token_budget.estimate_text_tokens(context),
         }
 
         metadata: dict[str, Any] = {
@@ -396,9 +504,6 @@ class PlannedRuntimeV4Service:
             usage=usage,
             metadata=metadata,
         )
-
-    def _approximate_tokens(self, text: str) -> int:
-        return max(1, len(text or "") // 4)
 
     def _format_sse(self, event: str, payload: dict[str, Any]) -> str:
         return f"event: {event}\\ndata: {json.dumps(payload, ensure_ascii=True)}\\n\\n"

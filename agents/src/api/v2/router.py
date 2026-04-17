@@ -15,6 +15,8 @@ from .scheme import (
     CrystalSpecExtractionRequest,
     DecisionModelInput,
     DecisionModelOutput,
+    DomainCriticRequest,
+    DomainCriticResponse,
     InsightRequest,
     InsightResponse,
     PlanningEvaluatorOutput,
@@ -115,6 +117,20 @@ def planning_evaluator(payload: PlanningEvaluatorRequest):
         logger.exception("planning_evaluator_model call failed")
         raise HTTPException(
             status_code=503, detail=f"planning_evaluator_failed: {exc}"
+        ) from exc
+
+
+@router.post("/domain-critic", response_model=DomainCriticResponse)
+def domain_critic(payload: DomainCriticRequest):
+    if runtime_services is None:
+        raise HTTPException(status_code=503, detail="runtime_services_unavailable")
+    try:
+        result = runtime_services.domain_critic.call(payload)
+        return result
+    except Exception as exc:
+        logger.exception("domain_critic_model call failed")
+        raise HTTPException(
+            status_code=503, detail=f"domain_critic_failed: {exc}"
         ) from exc
 
 

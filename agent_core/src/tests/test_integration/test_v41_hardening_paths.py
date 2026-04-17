@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from api.v4.contracts import EvaluationResult, PlanStep
+from api.v4.evaluator import LoopEvaluatorV4
+from api.v4.planner import DeepSeekOneShotPlanner
 from api.v4.scheme import CompletionRequestV4
 
 
@@ -28,13 +30,17 @@ def test_v41_valid_plan_completes(make_service):
     }
 
 
-def test_v41_invalid_plan_fallback_to_minimal(make_service):
+def test_v41_invalid_plan_fallback_to_minimal(make_service, monkeypatch):
     service = make_service()
 
-    def _normalize_steps_invalid(*_args, **_kwargs):
+    def _normalize_steps_invalid(self, **_kwargs):
         return []
 
-    service.runtime.planner._normalize_steps = _normalize_steps_invalid
+    monkeypatch.setattr(
+        DeepSeekOneShotPlanner,
+        "_normalize_steps",
+        _normalize_steps_invalid,
+    )
 
     response = service.chat(
         CompletionRequestV4(
@@ -48,13 +54,13 @@ def test_v41_invalid_plan_fallback_to_minimal(make_service):
     assert response.metadata["planner_fallback_reason"] == "invalid_plan"
 
 
-def test_v41_evaluator_failure_has_deterministic_fallback(make_service):
+def test_v41_evaluator_failure_has_deterministic_fallback(make_service, monkeypatch):
     service = make_service()
 
-    async def _raise(_state):
+    def _raise(self, _state):
         raise RuntimeError("forced evaluator failure")
 
-    service.runtime.evaluator.evaluate = _raise
+    monkeypatch.setattr(LoopEvaluatorV4, "_evaluate_sync", _raise)
 
     response = service.chat(
         CompletionRequestV4(
@@ -69,9 +75,24 @@ def test_v41_evaluator_failure_has_deterministic_fallback(make_service):
     assert isinstance(response.choices[0]["text"], str)
 
 
-def test_v41_tool_failure_maps_to_validation_stop(make_service, monkeypatch):
+def test_v41_single_tool_failure_continues_until_plan_exhausted(
+    make_service,
+    monkeypatch,
+):
     service = make_service()
     from tools.config import TOOL_REGISTRY
+
+    monkeypatch.setattr(
+        DeepSeekOneShotPlanner,
+        "_normalize_steps",
+        lambda self, **kwargs: [
+            PlanStep(
+                tool="query_materials_database",
+                target="mp-149",
+                purpose="Collect properties",
+            )
+        ],
+    )
 
     monkeypatch.setattr(
         TOOL_REGISTRY,
@@ -87,14 +108,14 @@ def test_v41_tool_failure_maps_to_validation_stop(make_service, monkeypatch):
         )
     )
 
-    assert response.metadata["stop_reason"] == "tool_execution_failed"
-    assert response.metadata["stop_reason_canonical"] == "tool_validation_failed"
+    assert response.metadata["stop_reason"] == "plan_exhausted"
+    assert response.metadata["stop_reason_canonical"] == "plan_exhausted"
 
 
-def test_v41_max_iterations_enforced(make_service):
+def test_v41_max_iterations_enforced(make_service, monkeypatch):
     service = make_service()
 
-    async def _never_stop(_state):
+    def _never_stop(self, _state):
         return EvaluationResult(
             stop=False,
             modify_plan=False,
@@ -102,19 +123,23 @@ def test_v41_max_iterations_enforced(make_service):
             reason="continue",
         )
 
-    service.runtime.evaluator.evaluate = _never_stop
-    service.runtime.planner._normalize_steps = lambda *args, **kwargs: [
-        PlanStep(
-            tool="query_materials_database",
-            target="mp-149",
-            purpose="step-1",
-        ),
-        PlanStep(
-            tool="search_scientific_documents",
-            target="Si",
-            purpose="step-2",
-        ),
-    ]
+    monkeypatch.setattr(LoopEvaluatorV4, "_evaluate_sync", _never_stop)
+    monkeypatch.setattr(
+        DeepSeekOneShotPlanner,
+        "_normalize_steps",
+        lambda self, **kwargs: [
+            PlanStep(
+                tool="query_materials_database",
+                target="mp-149",
+                purpose="step-1",
+            ),
+            PlanStep(
+                tool="search_scientific_documents",
+                target="Si",
+                purpose="step-2",
+            ),
+        ],
+    )
 
     response = service.chat(
         CompletionRequestV4(

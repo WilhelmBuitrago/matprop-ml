@@ -117,6 +117,7 @@ OUTPUT_SCHEMA = {
             },
         },
         "count": {"type": "integer", "minimum": 0},
+        "source": {"type": "string", "enum": ["db"]},
     },
     "required": ["materials", "count"],
     "additionalProperties": False,

@@ -7,6 +7,8 @@ from services.ollama_client import OllamaClient
 from .scheme import (
     DecisionModelInput,
     DecisionModelOutput,
+    DomainCriticRequest,
+    DomainCriticResponse,
     PlanningEvaluatorOutput,
     PlanningEvaluatorRequest,
     PlanningStep,
@@ -405,3 +407,37 @@ class InsightsModel:
             if isinstance(values, list):
                 return [str(item).strip() for item in values if str(item).strip()]
         return []
+
+
+class DomainCriticModel:
+    def __init__(self, model_name: str, ollama_client: OllamaClient):
+        self.model_name = model_name
+        self.ollama_client = ollama_client
+
+    def call(self, payload: DomainCriticRequest) -> DomainCriticResponse:
+        prompt = self._build_prompt(payload)
+        response = self.ollama_client.chat(
+            model=payload.model_name or self.model_name,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Return concise plain text strictly in requested format.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            options={"temperature": 0.0},
+        )
+        raw = str(response.get("message", {}).get("content", "")).strip()
+        if not raw:
+            raw = "VALID: no\nCONFIDENCE: 0.0\nISSUES:\n- empty_domain_critic_response"
+        return DomainCriticResponse(response=raw)
+
+    def _build_prompt(self, payload: DomainCriticRequest) -> str:
+        return (
+            f"{payload.prompt}\n\n"
+            "INPUT:\n"
+            f"user_query={json.dumps(payload.user_query, ensure_ascii=True)}\n"
+            f"tool_results={json.dumps(payload.tool_results, ensure_ascii=True)}\n"
+            f"reasoning_steps={json.dumps(payload.reasoning_steps, ensure_ascii=True)}\n"
+            f"draft_response={json.dumps(payload.draft_response, ensure_ascii=True)}\n"
+        )

@@ -1,5 +1,6 @@
 import logging
 import os
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -29,9 +30,15 @@ def _has_mp_api_key() -> bool:
     return False
 
 
+def _has_mp_api_dependency() -> bool:
+    return importlib.util.find_spec("mp_api") is not None
+
+
 def test_query_materials_production_flow(caplog, tool_test_logger):
     if not _has_mp_api_key():
         pytest.skip("MP_API_KEY is required for production query_materials flow")
+    if not _has_mp_api_dependency():
+        pytest.skip("mp_api dependency is required for production query_materials flow")
 
     caplog.set_level(logging.INFO)
     tool = QueryMaterialsDatabaseTool()

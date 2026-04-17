@@ -1,638 +1,326 @@
-# Agent Core - Documentacion Tecnica Determinista (Runtime v4)
+# Agent Core v4 - Documentacion tecnica para desarrollo y mantenimiento
 
-## 1. Alcance y fuente de verdad
-Este documento especifica el comportamiento operativo actual de `agent_core` v4 sin agregar features.
+## 1. Alcance, objetivo y fuentes de verdad
 
-Fuente de verdad implementada:
-- `src/api/v4/service.py`
-- `src/api/v4/loop.py`
-- `src/api/v4/planner.py`
-- `src/api/v4/evaluator.py`
-- `src/api/v4/state.py`
-- `src/api/v4/contracts.py`
-- `src/tools/base.py`
+Este documento describe el comportamiento implementado de `agent_core` en runtime `v4` con foco en ejecucion basada en evidencia, validacion de conocimiento y resiliencia determinista.
 
-Superficie publica vigente:
-- `POST /v4/completions`
+### 1.1 Alcance funcional documentado
 
-## 2. Definicion formal de execution_state
+- API HTTP expuesta por FastAPI.
+- Endpoint publico `POST /v4/completions` en modo sincronico y streaming SSE.
+- Runtime planificado con entry policy, planner, loop, evaluator, domain critic y generacion final.
+- Contratos de request/response y modelos internos de estado.
+- Presupuesto de contexto unificado por `max_context_tokens`.
+- Resiliencia determinista por niveles 2/3/4.
+- Observabilidad con trazas JSON por request y logging estructurado.
 
-### 2.1 Concepto
-`execution_state` es un objeto JSON enviado por `agent_core` a `/v2/planning-evaluator` para control interno del ciclo (planeacion/evaluacion). No persiste como clase propia dentro de `agent_core`; se construye por llamada.
+### 1.2 Fuentes de verdad (rutas canonicas)
 
-### 2.2 Estructura JSON por modo
+- `agent_core/src/api/app.py`
+- `agent_core/src/api/router.py`
+- `agent_core/src/api/security.py`
+- `agent_core/src/api/v4/router.py`
+- `agent_core/src/api/v4/scheme.py`
+- `agent_core/src/api/v4/service.py`
+- `agent_core/src/api/v4/loop.py`
+- `agent_core/src/api/v4/planner.py`
+- `agent_core/src/api/v4/evaluator.py`
+- `agent_core/src/api/v4/domain_critic.py`
+- `agent_core/src/api/v4/context_budget.py`
+- `agent_core/src/api/v4/confidence.py`
+- `agent_core/src/api/v4/resilience_policy.py`
+- `agent_core/src/api/v4/state.py`
+- `agent_core/src/api/v4/contracts.py`
+- `agent_core/src/api/v4/constants.py`
+- `agent_core/src/api/v4/trace.py`
+- `agent_core/src/api/v4/entry_policy.py`
+- `agent_core/src/api/v4/plan_validator.py`
+- `agent_core/src/api/v4/history_item.py`
+- `agent_core/src/api/v4/truncation.py`
+- `agent_core/src/api/v4/execution_state.py`
+- `agent_core/src/api/v4/runtime_state.py`
+- `agent_core/src/contracts/tool_result.py`
+- `agent_core/src/infrastructure/logging.py`
+- `agent_core/src/tools/config.py`
+- `agent_core/src/tools/base.py`
 
-#### 2.2.1 Modo `plan` (plan inicial)
-Usado por `DeepSeekOneShotPlanner.build_plan(...)`.
+## 2. Superficie publica y versionado observable
 
-```json
-{
-   "feedback": ""
-}
-```
+### 2.1 Rutas HTTP activas
+
+- Router raiz: `agent_core/src/api/router.py`.
+- Montaje de v4 con prefijo `/v4`.
+- Endpoint principal: `POST /v4/completions` (`agent_core/src/api/v4/router.py`).
+
+### 2.2 Comportamientos del endpoint
+
+- Si `stream=false` (default), responde `CompletionResponseV4`.
+- Si `stream=true`, responde `StreamingResponse` con `media_type="text/event-stream"` y cabeceras SSE.
+- Aplica seguridad mediante dependencia `enforce_request_security`.
+
+### 2.3 Versiones visibles
+
+- `FastAPI(... version="4.0.0")` en `agent_core/src/api/app.py`.
+- `metadata.runtime_version = "v4"` en `agent_core/src/api/v4/service.py`.
+
+## 3. Arquitectura por componentes
+
+### 3.1 Capa API
+
+- `api/app.py`: app, CORS, middleware de logging/correlacion.
+- `api/router.py`: composicion de routers.
+- `api/v4/router.py`: endpoint y bridge a servicio.
+
+### 3.2 Capa de seguridad
+
+- `api/security.py`: API key opcional y rate limiting in-memory.
+
+### 3.3 Capa de orquestacion runtime
+
+- `api/v4/service.py`: flujo end-to-end, llamada final, armado de respuesta.
+- `api/v4/loop.py`: control iterativo (budget -> tool -> evaluator -> branch).
+- `api/v4/planner.py`: plan inicial + replans.
+- `api/v4/evaluator.py`: evaluator de loop + integracion de domain critic.
+- `api/v4/domain_critic.py`: cliente, normalizacion de entradas y parser de salida.
+- `api/v4/resilience_policy.py`: decisiones deterministas de fallback.
+
+### 3.4 Capa de estado, contratos y presupuesto de contexto
+
+- `api/v4/state.py`: `AgentState`, `BudgetState`.
+- `api/v4/contracts.py`: `Plan`, `PlanStep`, `EvaluatorFeedback`, `EvaluationResult`.
+- `contracts/tool_result.py`: contrato unificado `ToolResult` cross-layer.
+- `api/v4/context_budget.py`: fuente unica para estimacion/truncado por tokens.
+- `api/v4/history_item.py`: historia tipada (`query`, `plan`, `tool_call`, `tool_result`, `evaluation`, `domain_critic`).
+
+### 3.5 Capa de trazabilidad/observabilidad
+
+- `api/v4/trace.py`: eventos de ejecucion y persistencia por request.
+- `infrastructure/logging.py`: logging JSON con `request_id`.
+
+### 3.6 Capa de herramientas
+
+- `tools/config.py`: registro central.
+- `tools/base.py`: contrato base y validacion schema.
+- `api/v4/entry_policy.py`: seleccion de tools.
+
+## 4. Contratos publicos (request/response)
+
+Fuente: `agent_core/src/api/v4/scheme.py`.
+
+### 4.1 Request `CompletionRequestV4`
+
+| Campo | Tipo | Default | Restricciones |
+|---|---|---|---|
+| `query` | `str` | - | no vacio tras normalizacion |
+| `stream` | `bool` | `False` | - |
+| `temperature` | `float` | `0.2` | `0.0 <= x <= 2.0` |
+| `max_tokens_for_response` | `int` | `512` | `32 <= x <= 4096` |
+| `max_iterations` | `int` | `8` | `1 <= x <= 32` |
+| `max_tool_calls` | `int` | `8` | `1 <= x <= 32` |
+| `max_context_tokens` | `int` | `2048` | `256 <= x <= 8192` |
+| `max_wall_time_ms` | `int \| None` | `None` | si existe: `1000 <= x <= 120000` |
+
+`max_context_tokens` es fuente unica de verdad para planner, evaluator y domain critic via `ContextBudget` request-scoped.
+
+### 4.2 Response `CompletionResponseV4`
+
+| Campo | Tipo | Observaciones |
+|---|---|---|
+| `id` | `str` | hash por request |
+| `object` | `str` | `text_completion` |
+| `choices` | `list[dict]` | texto final |
+| `usage` | `dict \| None` | tokens estimados con `ContextBudget.estimate_text_tokens` |
+| `metadata` | `dict \| None` | estado operativo, evaluaciones y trazas |
+
+## 5. Contratos internos principales
+
+### 5.1 ToolResult unificado
+
+Fuente: `agent_core/src/contracts/tool_result.py`.
+
+`ToolResult` incluye:
+
+- `status: "success" | "error"`
+- `payload: dict`
+- `error_code: str | None`
+- `error_detail: str | None`
+- `confidence: float` en `[0,1]`
+- `is_synthetic: bool`
+- `trace: str | None`
+- `source: "db" | "paper" | "rag" | "llm" | "simulation"`
+- `confidence_signals: dict[str, float]`
 
 Reglas:
-- Campo obligatorio en payload de `agent_core`: `feedback` (string).
-- Inicializacion en plan inicial: `""`.
-- En replan: contiene feedback textual del evaluator.
-
-#### 2.2.2 Modo `evaluate`
-Usado por `LoopEvaluatorV4.evaluate(...)`.
-
-```json
-{
-   "iterations_used": 1,
-   "tool_calls_used": 1,
-   "replans_used": 0
-}
-```
-
-Reglas:
-- Campos obligatorios: `iterations_used`, `tool_calls_used`, `replans_used` (int).
-- No se envian otros campos desde `agent_core`.
-
-### 2.3 Inicializacion y actualizacion por iteracion
-Inicializacion en runtime:
-- `iterations_used = 0`
-- `tool_calls_used = 0`
-- `replans_used = 0`
-
-Actualizacion en loop (`run_loop`):
-1. Antes de ejecutar cada step del plan: `iterations_used += 1`.
-2. Despues de invocar `_execute_tool(...)`: `tool_calls_used += 1`.
-3. Si `modify_plan == true` y replan exitoso: `replans_used += 1`.
-4. Limite de replans: `MAX_REPLANS = 2`.
-
-### 2.4 Diferencia explicita vs `history` y vs `state`
-- `execution_state`: contadores de control del loop y feedback de replan.
-- `history`: secuencia conversacional/operativa serializada por roles (`system`, `user`, `assistant`, `tool`).
-- `state` (payload externo): snapshot estructurado de alto nivel para evaluator/planner.
-   Ejemplo en evaluator: `materials_count`, `documents_count`, `insights_count`, `plan_cursor`, `plan_steps`, `stop_reason`.
-
-### 2.5 Ejemplo realista
-Payload enviado a `/v2/planning-evaluator` en modo `evaluate` tras 2 iteraciones y 1 replan:
-
-```json
-{
-   "mode": "evaluate",
-   "query": "Find stable semiconductor candidates with band gap around 1 eV",
-   "history": [
-      {"role": "system", "content": "You are an external evaluator controller. You are not a conversational actor and must not produce user-facing answers."},
-      {"role": "user", "content": "Find stable semiconductor candidates with band gap around 1 eV"},
-      {"role": "assistant", "content": "{\"plan\":{\"steps\":[{\"tool\":\"query_materials_database\",\"target\":\"Si\",\"purpose\":\"Collect evidence\"}],\"cursor\":0,\"status\":\"active\"}}"},
-      {"role": "assistant", "content": "{\"action\":\"use_tool\",\"tool_call\":{\"tool\":\"query_materials_database\",\"target\":\"Si\",\"purpose\":\"Collect evidence\"}}"},
-      {"role": "tool", "content": "{\"tool_result\":{\"status\":\"success\",\"structured_output\":{\"materials\":[{\"material_id\":\"mp-149\",\"formula\":\"Si\"}]}}}"}
-   ],
-   "state": {
-      "materials_count": 1,
-      "documents_count": 0,
-      "insights_count": 0,
-      "plan_cursor": 0,
-      "plan_steps": 1,
-      "stop_reason": null
-   },
-   "plan": {
-      "steps": [{"tool": "query_materials_database", "target": "Si", "purpose": "Collect evidence"}],
-      "cursor": 0,
-      "status": "active"
-   },
-   "execution_state": {
-      "iterations_used": 2,
-      "tool_calls_used": 2,
-      "replans_used": 1
-   },
-   "max_steps": 1
-}
-```
-
-## 3. Definicion precisa de constraints_ok
-
-### 3.1 Significado operativo
-`constraints_ok` indica si, segun evaluator, las restricciones necesarias para cerrar el loop ya se cumplen.
-
-Regla de stop efectiva en `agent_core`:
-
-```text
-stop efectivo = feedback.stop == true AND feedback.constraints_ok == true
-```
-
-Si `stop=true` y `constraints_ok=false`, el loop no se detiene por suficiencia.
-
-### 3.2 Quién lo evalua
-- Planner: no evalua `constraints_ok`.
-- Evaluator (`/v2/planning-evaluator` con `mode="evaluate"`): unica fuente de `constraints_ok`.
-
-### 3.3 Tipos de constraints (hard/soft)
-En runtime v4 no existe tipado formal hard/soft dentro de `agent_core`.
-
-Implicacion:
-- Cualquier taxonomia interna del evaluator debe colapsarse a un booleano final `constraints_ok`.
-- `agent_core` no distingue ni pondera tipos de constraint; solo consume el booleano.
-
-### 3.4 Ejemplos concretos
-- `constraints_ok=true`: evidencia suficiente y consistente para responder.
-- `constraints_ok=false`: faltan validaciones o evidencia para restricciones solicitadas.
-
-### 3.5 Que ocurre cuando es false
-- Nunca activa stop por suficiencia, aun si `stop=true`.
-- El loop continua: replan si `modify_plan=true` y hay cupo; de lo contrario avanza cursor del plan.
-
-## 4. Especificacion de uso de history
-
-### 4.1 Roles exactos admitidos
-Roles validos en historia enviada a modelos externos:
-- `system`
-- `user`
-- `assistant`
-- `tool`
-
-No se usa rol `evaluator`.
-
-### 4.2 Subconjunto que recibe cada componente
-
-#### 4.2.1 Planner (plan inicial)
-- `history=[]`.
-- No recibe historial conversacional previo.
-
-#### 4.2.2 Planner (replan)
-- Recibe `history` construido por `LoopEvaluatorV4.build_history(state)`.
-- Contenido exacto:
-   1. `system`: mensaje de control del evaluator.
-   2. `user`: `state.query`.
-   3. `assistant`: plan actual serializado.
-   4. Para cada `tool_start`: `assistant` con `{"action":"use_tool","tool_call":...}`.
-   5. Para cada `tool_result`: `tool` con `{"tool_result":...}`.
-
-#### 4.2.3 Evaluator
-- Recibe exactamente el mismo formato producido por `build_history(state)`.
-
-### 4.3 Estrategia de truncamiento
-No existe truncamiento de `history` en v4.
 
-Efecto:
-- Se incluye toda la traza de eventos `tool_start` y `tool_result` acumulada en `state.execution_trace`.
-
-### 4.4 Justificacion de diseno
-- Evaluator y replan requieren contexto operativo de ejecucion (no solo chat) para decidir `stop`/`modify_plan`.
-- Se omiten eventos no tool (`evaluation`, `stop`, `final`, etc.) para reducir ruido y evitar retroalimentacion circular.
-
-## 5. Flujo de replanificacion (modify_plan)
-
-### 5.1 Trigger
-Se activa replan cuando:
-- `feedback.modify_plan == true`
-- `state.replans_used < 2`
-
-### 5.2 Feedback enviado al planner
-En replan, `agent_core` envia solo:
-- `feedback`: texto libre `feedback.feedback`
-
-Se inyecta en payload como:
-
-```json
-"execution_state": {
-   "feedback": "<feedback textual del evaluator>"
-}
-```
-
-### 5.3 Que se excluye explicitamente
-No se envia al planner en `execution_state` de replan:
-- `stop`
-- `constraints_ok`
-- `modify_plan`
-- metadatos de score/confianza del evaluator (no existen en contrato consumido)
-
-### 5.4 Prevencion de leakage/ruido
-- El planner recibe historial operativo filtrado (solo eventos de tools) y feedback textual corto.
-- No recibe eventos `evaluation` previos ni respuesta final al usuario.
-
-### 5.5 Limite de replans e impacto en estado
-- Limite fijo: `MAX_REPLANS = 2`.
-- Si se alcanza el limite:
-   - se ignora `modify_plan=true` posterior,
-   - el loop continua con `state.plan.cursor += 1` sobre el plan vigente.
-- Cada replan exitoso:
-   - reemplaza `state.plan` completo,
-   - incrementa `state.replans_used`.
-
-## 6. Especificacion de ejecucion de tools
-
-### 6.1 Formato de entrada a tools
-Cada step del plan tiene:
-
-```json
-{
-   "tool": "<tool_name>",
-   "target": "<optional>",
-   "purpose": "<non-empty>"
-}
-```
-
-`agent_core` transforma `tool+target+state` en argumentos de ejecucion por `_build_tool_arguments(...)`.
-
-Ejemplos:
-- `query_materials_database`: `{"material_id": "mp-149", "filters": {}, "limit": 5}` o `{"formula": "Si", ...}`.
-- `validate_material_constraints`: `{"constraints": ...}`.
-- `search_scientific_documents`: `{"query": state.query, "material_focus": ..., "max_results": 5}`.
-
-Validacion previa:
-- `ToolRegistry.validate_input(tool_name, arguments)` contra `input_schema`.
-
-### 6.2 Formato de salida de tools
-Contrato normalizado interno en loop:
-
-```json
-{
-   "status": "success|error",
-   "raw_output": {},
-   "structured_output": {},
-   "error_message": "...|null"
-}
-```
-
-La salida nativa de herramienta (`tools.base.ToolResult`) se convierte a este contrato.
-
-Validacion posterior:
-- `ToolRegistry.validate_output(tool_name, payload)` contra `output_schema`.
-
-### 6.3 Serializacion en history (rol tool)
-- `tool_start` se serializa como `assistant`:
-
-```json
-{"action": "use_tool", "tool_call": {...}}
-```
-
-- `tool_result` se serializa como `tool`:
-
-```json
-{"tool_result": {...}}
-```
-
-### 6.4 Efecto sobre execution_state
-- Cada invocacion de `_execute_tool(...)` incrementa `tool_calls_used`.
-- Cada paso de loop incrementa `iterations_used`.
-- Replan exitoso incrementa `replans_used`.
-
-### 6.5 Manejo de errores de tools
-Errores manejados por `agent_core`:
-- Input invalido por schema -> `status=error`.
-- Excepcion de ejecucion (incluye timeouts internos de la herramienta, si la herramienta los lanza) -> `status=error`.
-- Salida invalida por schema -> `status=error`.
-- Tool reporta `status != success` -> `status=error`.
-
-Comportamiento del loop ante error:
-- `state.stop_reason = "tool_execution_failed"`
-- emision de evento `stop`
-- terminacion inmediata del loop.
-
-Nota operativa:
-- `agent_core` no aplica timeout externo global por tool call en `run_loop`; depende del comportamiento de la herramienta.
-
-## 7. Contrato interno asumido de /v2/planning-evaluator (subset consumido)
-
-No redefine el contrato completo; documenta solo lo que `agent_core` usa.
-
-### 7.1 Campos consumidos obligatoriamente
-- `plan` (semantica de salida de plan): consumido como lista de `steps` y convertido a `Plan` interno.
-- `stop` (modo evaluate).
-- `constraints_ok` (modo evaluate; fallback a `stop` si no viene).
-- `modify_plan` (modo evaluate).
-
-### 7.2 Suposiciones criticas
-- Estructura JSON parseable y tipo objeto.
-- Coherencia minima de pasos: tools validos y secuencia coherente (validada por `is_plan_coherent`).
-- Determinismo parcial esperado: mismas entradas tienden a producir señales de control compatibles, pero no se asume determinismo estricto del modelo.
-- Si falta `constraints_ok`, se asume `bool(stop)` por fallback defensivo.
-
-## 8. Separacion de responsabilidades
-
-### 8.1 history (contexto conversacional/operativo)
-- Formato de mensajes por rol para consumo de modelos.
-- Incluye query, plan serializado y eventos de herramientas.
-- No es fuente de verdad estructural del runtime.
-
-### 8.2 execution_state (control del proceso)
-- Contadores y feedback puntual para plan/evaluate.
-- Enfocado en gobernanza de loop, no en contenido cientifico.
-
-### 8.3 state (snapshot estructurado)
-- Resumen estructurado de estado del agente para evaluator/planner.
-- En evaluator: conteos y posicion de plan.
-- En planner inicial: contexto de entry policy.
-
-### 8.4 Anti-patrones (NO hacer)
-- No usar `history` como datastore de estado estructurado persistente.
-- No inferir stop solo con `stop=true`; siempre requiere `constraints_ok=true`.
-- No enviar eventos `evaluation` al planner para replan (introduce bucle de ruido).
-- No mezclar metadata de respuesta final de usuario dentro de `execution_state`.
-
-## 9. Ejemplo end-to-end completo del loop
-
-Escenario: consulta de semiconductor estable.
-
-### 9.1 Query de entrada
-
-```json
-{
-   "query": "Busca un semiconductor estable con band gap cercano a 1 eV"
-}
-```
-
-### 9.2 Plan inicial (mode=plan)
-Respuesta del servicio planning-evaluator (subset util):
-
-```json
-{
-   "steps": [
-      {
-         "action": "use_tool",
-         "tool": "query_materials_database",
-         "input": {"formula": "Si"},
-         "purpose": "Recolectar candidatos estables"
-      },
-      {
-         "action": "use_tool",
-         "tool": "validate_material_constraints",
-         "input": {},
-         "purpose": "Verificar restricciones solicitadas"
-      },
-      {
-         "action": "respond",
-         "purpose": "Responder con evidencia"
-      }
-   ]
-}
-```
-
-`agent_core` normaliza a `PlanStep` y descarta `respond` para ejecucion de tools.
-
-### 9.3 Iteracion 1: tool execution
-- Ejecuta `query_materials_database`.
-- `tool_result.status=success`.
-- `apply_tool_result(...)` actualiza `state.hypotheses` y `state.properties_collected`.
-
-### 9.4 Evaluacion 1 (mode=evaluate)
-Respuesta evaluator:
-
-```json
-{
-   "stop": false,
-   "constraints_ok": false,
-   "modify_plan": true,
-   "feedback": "falta validar restricciones del usuario"
-}
-```
-
-Accion en loop:
-- No stop (constraints no satisfechas).
-- Como `modify_plan=true` y `replans_used<2`, se ejecuta replan.
-
-### 9.5 Replan
-Planner recibe:
-- `history` operativo filtrado,
-- `state` minimo (`cursor`, `replans_used`),
-- `execution_state.feedback` con texto del evaluator.
-
-Genera plan actualizado; `state.plan` se reemplaza y `replans_used += 1`.
-
-### 9.6 Iteracion 2: tool execution
-- Ejecuta `validate_material_constraints`.
-- `apply_tool_result(...)` escribe `state.constraints["constraint_validation"]`.
-
-### 9.7 Evaluacion 2 y stop
-Respuesta evaluator:
-
-```json
-{
-   "stop": true,
-   "constraints_ok": true,
-   "modify_plan": false,
-   "feedback": "evidencia suficiente"
-}
-```
-
-Accion final:
-- `state.stop_reason = "sufficient_evidence"`
-- `state.plan.status = "completed"`
-- termina loop.
-
-## 10. Referencia de stop reasons actuales
-Valores observables en runtime v4:
-- `sufficient_evidence`
-- `budget_exhausted`
-- `plan_exhausted`
-- `precondition_failed`
-- `tool_execution_failed`
-- `evaluator_failed`
-- `planner_failed`
-
-## 11. Delta v1.0.0 (Hardening determinista v4.1)
-
-Esta seccion reemplaza cualquier enunciado previo conflictivo en este documento.
-
-### 11.1 Nuevos modelos de estado tipado
-- `ExecutionState` (`src/api/v4/execution_state.py`):
-   - Campos: `iterations_used`, `tool_calls_used`, `replans_used`, `max_iterations`, `max_tool_calls`, `max_wall_time_ms`, `started_at_ms`.
-   - Metodos: `to_dict()`, `from_dict()`, `elapsed_ms()`.
-- `RuntimeState` (`src/api/v4/runtime_state.py`):
-   - Campos: `plan_cursor`, `plan_steps`, `steps_status`, `materials_count`, `documents_count`, `insights_count`, `stop_reason`.
-   - Metodos: `mark_step_done()`, `mark_step_failed()`, `to_dict()`.
-- Integracion en `AgentState` (`src/api/v4/state.py`):
-   - Coexiste con `BudgetState` por compatibilidad.
-   - Sincronizacion explicita por `sync_execution_state()`.
-   - Conteos runtime actualizados por `refresh_runtime_counts()`.
-
-### 11.2 History tipado y truncamiento determinista
-- `HistoryItem` (`src/api/v4/history_item.py`) con tipos validos:
-   - `query`, `plan`, `tool_call`, `tool_result`.
-- Regla: evaluator no se persiste como tipo de history.
-- Truncamiento determinista (`src/api/v4/truncation.py`):
-   - Estrategia tail-preserving: conserva eventos recientes hasta `max_tokens`.
-   - Integrado en `LoopEvaluatorV4.build_history()`.
-
-### 11.3 Contrato formal de evaluator + policy de fallo
-- `EvaluationResult` (`src/api/v4/contracts.py`):
-   - `stop`, `modify_plan`, `constraints_ok`, `reason`.
-   - Alias de compatibilidad: `feedback` -> `reason`.
-- Failure policy (`src/api/v4/failure_policy.py`):
-   - `final_with_context` si existe `tool_result` en history.
-   - `final_without_context` si no hay resultados de herramientas.
-- Integracion en `PlannedRuntimeV4Service`:
-   - Si `stop_reason_canonical == evaluator_failed`, selecciona fallback determinista segun policy.
-
-### 11.4 Validacion fuerte de plan + fallback obligatorio
-- Validador dedicado (`src/api/v4/plan_validator.py`):
-   - maximo 8 pasos.
-   - dependencias (`document_rag` requiere `search_scientific_documents`).
-   - no duplicados exactos de step.
-- Planner (`src/api/v4/planner.py`):
-   - Si plan invalido/request fallida/payload invalido -> `build_minimal_plan(...)`.
-   - `fallback_reason = invalid_plan`.
-
-### 11.5 Tool execution layer endurecida
-- Validacion input/output en loop (`src/api/v4/loop.py`) mantiene gate de schema y agrega segunda validacion por `tools/validator.py`.
-- Regla de fallo:
-   - si validacion input/output falla -> stop canonical `tool_validation_failed` (legacy `tool_execution_failed`).
-   - step marcado `failed` en `RuntimeState`.
-
-### 11.6 Loop order formal
-Orden por iteracion (estricto):
-1. validar presupuesto (`max_iterations`, `max_tool_calls`, `timeout`)
-2. ejecutar step
-3. validar output
-4. actualizar estado
-5. ejecutar evaluator
-6. branching (`completed` / `replan` / `advance cursor`)
-
-### 11.7 Stop reasons: canonico + legado
-- Canonicos (`src/api/v4/constants.py`):
-   - `completed`, `max_iterations`, `max_tool_calls`, `evaluator_failed`, `tool_validation_failed`, `invalid_plan`, `timeout` (+ transicionales internos).
-- Legado (compatibilidad externa):
-   - `sufficient_evidence`, `budget_exhausted`, `tool_execution_failed`, etc.
-- Mapeo centralizado: `to_legacy_stop_reason(...)`.
-
-### 11.8 Trazabilidad reproducible
-Trace persistido `{AGENT_TRACE_DIR}/{request_id}.json` incluye:
-- `query`
-- `plan`
-- `execution_state`
-- `runtime_state`
-- `history`
-- `evaluations`
-- `stop_reason`
-- `stop_reason_canonical`
-- `final_answer`
-
-### 11.9 Integracion con agents
-- Planner: `mode=plan`.
-- Evaluator: `mode=evaluate`.
-- Modelo de control: `deepseek-r1:8b` (via env `AGENT_PLANNING_EVALUATOR_MODEL` con fallback planner/evaluator model vars).
-
-## 12. Verificacion contra Plan Maestro v4 -> v4.1
-
-Esta seccion valida el estado real implementado en codigo contra el blueprint solicitado.
-
-### 12.1 Mapeo de rutas del blueprint vs codigo real
-
-El blueprint usa prefijo conceptual `src/core/...`; la implementacion real vive en `src/api/v4/...` y `src/api/...`.
-
-- `src/core/state/execution_state.py` -> `src/api/v4/execution_state.py`
-- `src/core/state/runtime_state.py` -> `src/api/v4/runtime_state.py`
-- `src/core/history/history_item.py` -> `src/api/v4/history_item.py`
-- `src/core/history/truncation.py` -> `src/api/v4/truncation.py`
-- `src/core/planner/plan_models.py` -> `src/api/v4/contracts.py` (`Plan`, `PlanStep`)
-- `src/core/planner/plan_validator.py` -> `src/api/v4/plan_validator.py`
-- `src/core/evaluator/failure_policy.py` -> `src/api/v4/failure_policy.py`
-- `src/core/constants.py` -> `src/api/v4/constants.py`
-
-### 12.2 Matriz de cumplimiento (Plan Maestro)
-
-1. **State layer (ExecutionState/RuntimeState):** Implementado.
-   - Evidencia: `src/api/v4/execution_state.py`, `src/api/v4/runtime_state.py`, sincronizacion en `src/api/v4/state.py`.
-
-2. **History tipado + evaluator fuera de history:** Implementado.
-   - Evidencia: `HISTORY_TYPES` en `src/api/v4/history_item.py`; evaluator no agrega tipo propio, solo consume `HistoryItem`.
-
-3. **Truncamiento determinista:** Implementado.
-   - Evidencia: `truncate_history(...)` en `src/api/v4/truncation.py`, uso en `LoopEvaluatorV4.build_history(...)`.
-
-4. **Plan contract + validacion fuerte + fallback:** Implementado.
-   - Evidencia: `is_plan_coherent(...)` y `build_minimal_plan(...)` en `src/api/v4/plan_validator.py`; fallback en `src/api/v4/planner.py`.
-
-5. **Tool execution validation input/output + fail rule:** Implementado.
-   - Evidencia: `_execute_tool(...)` en `src/api/v4/loop.py` con `validate_input`, `validate_output` y `validate_tool_output`; stop canonical `tool_validation_failed`.
-
-6. **Evaluator contract + failure policy:** Implementado.
-   - Evidencia: `EvaluationResult` en `src/api/v4/contracts.py`; `handle_evaluator_failure(...)` en `src/api/v4/failure_policy.py`; uso en `src/api/v4/service.py`.
-
-7. **Loop order and formal branching:** Implementado.
-   - Evidencia: `run_loop(...)` en `src/api/v4/loop.py` sigue el orden presupuesto -> step -> validacion -> estado -> evaluator -> branching.
-
-8. **Global stop reasons enum:** Implementado.
-   - Evidencia: `STOP_REASONS` en `src/api/v4/constants.py`.
-   - Nota: incluye razones transicionales adicionales (`plan_exhausted`, `precondition_failed`, `planner_failed`, `controlled_failure`) para compatibilidad operativa.
-
-9. **Budget limits enforcement:** Implementado.
-   - Evidencia: checks `max_iterations`, `max_tool_calls`, `max_wall_time_ms` en `src/api/v4/loop.py`.
-
-10. **Trace obligatorio y reproducible:** Implementado.
-    - Evidencia: persistencia JSON en `src/api/v4/trace.py` con `query`, `plan`, `execution_state`, `runtime_state`, `history`, `evaluations`, `stop_reason`, `final_answer`.
-
-11. **Integracion con agents (mode plan/evaluate):** Implementado.
-    - Evidencia: payload `mode="plan"` en `src/api/v4/planner.py` y `mode="evaluate"` en `src/api/v4/evaluator.py`.
-
-12. **Testing obligatorio (unit + integration):** Implementado.
-    - Evidencia unitaria: `src/tests/test_plan_validator.py`, `src/tests/test_tool_validator.py`, `src/tests/test_evaluator_failure_policy.py`, `src/tests/test_truncation.py`.
-    - Evidencia integracion minima: `src/tests/test_integration/test_v41_hardening_paths.py` cubre plan valido, invalid_plan fallback, evaluator failure, tool failure, max_iterations.
-
-13. **Extensiones futuras no implementadas:** Cumplido (no implementadas).
-
-14. **Criterios de aceptacion de determinismo/estado/fallback:** Sustancialmente implementados en runtime v4.1.
-
-### 12.3 Desviaciones detectadas del blueprint literal
-
-- **Convencion de rutas:** El sistema usa `src/api/v4` en lugar de `src/core`.
-- **STOP_REASONS:** Se mantienen razones extra de transicion por compatibilidad, ademas del subset minimo del blueprint.
-- **CHANGELOG.md global (obligatorio en blueprint):** Implementado en raiz del repositorio (`CHANGELOG.md`).
-
-## 13. Delta Priority 1 Hardening (seguridad y observabilidad)
-
-Este delta corresponde al plan `docs/superpowers/plans/2026-04-14-agent-core-priority1-hardening.md`.
-
-### 13.1 Seguridad de endpoint
-- Modulo: `src/api/security.py`
-- Contratos:
-  - `AGENT_AUTH_MODE` en `{disabled, api_key}`.
-  - `AGENT_API_KEY` requerido en modo `api_key`.
-  - `AGENT_API_KEY_HEADER` configurable (default `X-API-Key`).
-- Rate limiting in-memory (sliding window):
-  - `AGENT_RATE_LIMIT_ENABLED`
-  - `AGENT_RATE_LIMIT_MAX_REQUESTS`
-  - `AGENT_RATE_LIMIT_WINDOW_SECONDS`
-- Enforcement en endpoint: `Depends(enforce_request_security)` en `src/api/v4/router.py`.
-
-### 13.2 Hardening de request contract
-- Archivo: `src/api/v4/scheme.py`
-- Cambios:
-  - `query` 1..10000 + normalizacion `strip()` + rechazo de blanco.
-  - `temperature` 0.0..2.0.
-  - `max_tokens_for_response` 32..4096.
-
-### 13.3 Logging estructurado y correlacion
-- Nuevo modulo: `src/infrastructure/logging.py`
-  - `JsonFormatter`, `RequestIdFilter`, `configure_logging()`, `set_request_id()/reset_request_id()`.
-- Integracion HTTP middleware: `src/api/app.py`
-  - Propaga/genera `X-Request-ID`.
-  - Log de ciclo request/response con contexto.
-- Integracion runtime core:
-  - `src/api/v4/service.py`
-  - `src/api/v4/loop.py`
-  - `src/api/v4/planner.py`
-  - `src/api/v4/evaluator.py`
-
-### 13.4 Contrato operativo de entorno y deps
-- `.env.example` actualizado con variables de auth/rate-limit/log.
-- `requirements.txt` pinneado en dependencias criticas.
-- Documentacion general y README alineados con hardening minimo.
-
-### 13.5 Cobertura de pruebas agregada para hardening
-- `src/tests/test_security_env_contract.py`
-- `src/tests/test_request_validation.py`
-- `src/tests/test_api_security.py`
-- `src/tests/test_core_logging.py`
-- `src/tests/test_security_docs_contract.py`
-- `src/tests/test_requirements_pinned.py`
-
-## 14. Estado operativo consolidado
-
-El runtime actual queda documentado como `v4.1` endurecido, con:
-- control determinista de loop,
-- contratos tipados de estado,
-- fallback formal de evaluator,
-- validacion de plan/tools,
-- trazabilidad reproducible,
-- y hardening Priority 1 de seguridad/observabilidad.
-
-**Ultima actualizacion:** Abril 15, 2026
-**Version documento:** v1.1.0
-**Tipo:** Tecnico operativo
+- `source="rag"` fuerza `is_synthetic=True`.
+- Se exponen propiedades de compatibilidad (`raw_output`, `structured_output`, `error_message`).
+
+### 5.2 Evaluacion
+
+`EvaluationResult` (`api/v4/contracts.py`) incluye:
+
+- `stop`, `modify_plan`, `constraints_ok`, `reason`
+- `confidence`
+- `domain_valid`, `domain_confidence`, `domain_issues`
+
+Combinacion aplicada en evaluator:
+
+- `stop = evaluator_stop AND domain_valid`
+- `replan = evaluator_modify_plan OR NOT domain_valid`
+- `confidence = min(evaluator_confidence, domain_confidence)`
+- hard guard: si `domain_valid=False`, entonces `stop=False` y `replan=True`.
+
+## 6. Confidence por tipo de fuente
+
+Fuente: `agent_core/src/api/v4/confidence.py`.
+
+- Deterministas (`db`, `paper`): clamp `[0.9, 1.0]` con `completeness` + `consistency`.
+- RAG: formula exacta
+
+`confidence = 0.5 * avg_similarity + 0.3 * agreement + 0.2 * coverage`
+
+- LLM puro (`llm`): clamp `[0.3, 0.6]` con `structure_consistency` + `low_entropy`.
+- Simulacion (`simulation`): `confidence = 1 - normalized_error`.
+
+## 7. Domain critic
+
+Fuente: `agent_core/src/api/v4/domain_critic.py` y `api/v4/evaluator.py`.
+
+### 7.1 Input obligatorio enviado
+
+- `user_query`
+- `tool_results` normalizados (incluyen `confidence`, `source`, `trace`)
+- `reasoning_steps` resumidos/truncados
+- `draft_response`
+
+### 7.2 Prompt de intencion
+
+El prompt exige evaluar validez fisica/coherencia y responder formato:
+
+- `VALID: <yes/no>`
+- `CONFIDENCE: <0-1>`
+- `ISSUES:` con lista.
+
+### 7.3 Parsing y precedencia
+
+- Parser extrae `valid` (bool), `confidence` (float), `issues` (list[str]).
+- Regla critica aplicada: no puede existir cierre final con `domain_valid=False`.
+
+### 7.4 Modo de activacion
+
+`DOMAIN_CRITIC_MODE`:
+
+- `always`
+- `only_stop`
+
+## 8. Resiliencia determinista (ejecutable)
+
+Fuente: `agent_core/src/api/v4/resilience_policy.py`, `service.py`, `loop.py`.
+
+### Nivel 2 (planner falla)
+
+Condicion:
+
+- excepcion en planner o plan invalido.
+
+Accion:
+
+- seleccion determinista por keyword:
+  - `property_query` -> `query_materials_database`
+  - `literature` -> pipeline `search_scientific_documents` + `document_rag`
+
+### Nivel 3 (tools fallan)
+
+Condicion:
+
+- multiples fallos de tools o resultados vacios/invalidos acumulados.
+
+Accion:
+
+- fallback directo al modelo final en modo explicito (`final_model_direct_fallback`), con modelo por defecto `WilhelmBuitrago/llamat-3-chat-8b:Q5_K_M`.
+
+### Nivel 4 (fallo total)
+
+Condicion:
+
+- fallo en llamada al modelo final.
+
+Accion:
+
+- respuesta explicita de limitacion tecnica y metadata de resiliencia nivel 4.
+
+## 9. Flujo del runtime v4
+
+1. Request `POST /v4/completions`.
+2. Inicializacion de estado + budget + trace emitter.
+3. Entry policy selecciona catalogo de tools.
+4. Planner produce plan; si falla, se recupera con resiliencia nivel 2.
+5. Loop por pasos:
+   - valida precondiciones y schemas,
+   - ejecuta tool,
+   - calcula confidence por fuente,
+   - actualiza estado,
+   - evaluator decide control,
+   - domain critic valida fisica y puede forzar replan.
+6. Si hay degradacion de tools, puede activarse nivel 3.
+7. Generacion final; si falla, nivel 4.
+8. Respuesta con `usage`, `metadata`, trazas y stop reasons.
+
+## 10. Stop reasons y compatibilidad
+
+Fuente: `api/v4/constants.py` y `api/v4/state.py`.
+
+- Se mantiene razon canonica + mapping legacy para compatibilidad externa.
+- `completed` mapea a `sufficient_evidence` en metadata legacy.
+
+## 11. Truncamiento y contexto
+
+Fuente: `api/v4/context_budget.py`.
+
+- Estimacion por tokenizer (`shared.nlp.tokenizer.tokenize`), no heuristica `len(text)//4`.
+- Truncamiento explicito prioriza items relevantes recientes.
+- Aplica de forma consistente en planner/evaluator/domain critic y metricas de uso en response.
+
+## 12. Herramientas y metadata de evidencia
+
+Todos los tools catalogados retornan `ToolResult` con metadata de evidencia:
+
+1. `query_materials_database` -> `source=db`, deterministic signals.
+2. `validate_material_constraints` -> `source=db`, deterministic signals.
+3. `search_scientific_documents` -> `source=paper`, deterministic signals.
+4. `document_rag` -> `source=rag`, `is_synthetic=True`, `avg_similarity/agreement/coverage`.
+5. `generate_crystal_structure` -> `source=llm`, `is_synthetic=True`, `structure_consistency/low_entropy`.
+
+## 13. Observabilidad
+
+- Logging JSON con `request_id`.
+- Trace por request en `{AGENT_TRACE_DIR}/{request_id}.json`.
+- Trace adicional de domain critic en `{request_id}.domain_critic.json`.
+
+## 14. Limitaciones actuales verificables
+
+1. La validez fisica depende de salida de un LLM critic; se mitiga con parser estricto y precedencia dura.
+2. La clasificacion `property_query` vs `literature` es keyword-based y determinista (no semantica profunda).
+3. No hay timeout global independiente por endpoint mas alla de timeouts configurados por llamada.
+
+## 15. Estado de pruebas relevantes
+
+Suites verificadas durante este refactor:
+
+- `tests/test_loop_stop_gating.py`
+- `tests/test_evaluator_boundaries.py`
+- `tests/test_truncation.py`
+- `tests/test_integration/test_loop_termination.py`
+- `tests/test_integration/test_full_loop.py`
+- `tests/test_tools/*/test_tool_comprehensive.py` (las cinco tools)
+- `tests/test_resilience_policy.py`
+
+Resultado observado en ejecuciones target:
+
+- runtime/integration target: 11 passed.
+- tools comprehensive target: 31 passed.
+- evaluator/resilience additions: 8 passed.
+
+---
+
+Documento actualizado con base exclusiva en las fuentes listadas en la seccion 1.2.

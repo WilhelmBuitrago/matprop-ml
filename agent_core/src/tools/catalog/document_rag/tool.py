@@ -81,6 +81,9 @@ class DocumentRAGTool(ToolContract):
                 payload={},
                 error_code="VALIDATION_ERROR",
                 error_detail="query is required",
+                source="rag",
+                is_synthetic=True,
+                trace="document_rag:empty_query",
             )
 
         if not isinstance(documents, list) or not documents:
@@ -90,6 +93,9 @@ class DocumentRAGTool(ToolContract):
                 payload={},
                 error_code="VALIDATION_ERROR",
                 error_detail="documents must be a non-empty list",
+                source="rag",
+                is_synthetic=True,
+                trace="document_rag:empty_documents",
             )
 
         top_k = int(kwargs.get("top_k", 10))
@@ -167,6 +173,9 @@ class DocumentRAGTool(ToolContract):
                 payload={},
                 error_code="NO_DOCUMENTS_PROCESSED",
                 error_detail="No documents could be downloaded and parsed",
+                source="rag",
+                is_synthetic=True,
+                trace="document_rag:no_documents_processed",
             )
 
         query_normalized, query_keywords = normalize_query(query)
@@ -230,7 +239,58 @@ class DocumentRAGTool(ToolContract):
             )
 
         logger.info("document_rag success results=%d", len(results))
-        return ToolResult(status="success", payload={"results": results})
+        trace_refs: list[str] = []
+        scores: list[float] = []
+        for item in results[:8]:
+            ref = str(item.get("doi") or item.get("url") or item.get("document_id") or "").strip()
+            if ref:
+                trace_refs.append(ref)
+        for item in results:
+            score = item.get("score")
+            if isinstance(score, (int, float)):
+                scores.append(float(score))
+
+        avg_similarity = sum(scores) / len(scores) if scores else 0.4
+        avg_similarity = max(0.0, min(1.0, avg_similarity))
+
+        unique_docs = {
+            str(item.get("document_id") or "").strip()
+            for item in results
+            if str(item.get("document_id") or "").strip()
+        }
+        selected_doc_count = max(1, len(selected_documents))
+        coverage = len(unique_docs) / float(selected_doc_count)
+        coverage = max(0.0, min(1.0, coverage))
+
+        with_extracted = sum(
+            1
+            for item in results
+            if isinstance(item.get("extracted_info"), list) and item.get("extracted_info")
+        )
+        agreement = with_extracted / float(max(1, len(results)))
+        agreement = max(0.0, min(1.0, agreement))
+
+        return ToolResult(
+            status="success",
+            payload={
+                "results": results,
+                "source": "rag",
+                "trace_refs": trace_refs,
+                "confidence_signals": {
+                    "avg_similarity": avg_similarity,
+                    "agreement": agreement,
+                    "coverage": coverage,
+                },
+            },
+            source="rag",
+            is_synthetic=True,
+            trace=";".join(trace_refs) or f"document_rag:results_count={len(results)}",
+            confidence_signals={
+                "avg_similarity": avg_similarity,
+                "agreement": agreement,
+                "coverage": coverage,
+            },
+        )
 
     def _to_document_metadata(self, raw: dict[str, Any]) -> DocumentMetadata | None:
         document_id = str(raw.get("document_id") or "").strip()

@@ -155,3 +155,36 @@ def test_v4_stops_when_constraints_ok_is_true():
     )
 
     assert out.stop_reason == "sufficient_evidence"
+
+
+def test_v4_domain_invalid_never_stops_even_if_evaluator_requests_stop():
+    import asyncio
+
+    state = _build_v4_state()
+    state.replans_used = 2
+    state.sync_execution_state()
+    evaluator = _EvaluatorStub(
+        EvaluatorFeedbackV4(
+            stop=True,
+            constraints_ok=True,
+            modify_plan=False,
+            feedback="enough evidence",
+            domain_valid=False,
+            domain_confidence=0.2,
+            domain_issues=["physical inconsistency"],
+        )
+    )
+
+    out = asyncio.run(
+        run_loop_v4(
+            state,
+            _RegistryStub(),
+            _PlannerStub(),
+            evaluator,
+            _EmitterStub(),
+            [{"name": "query_materials_database", "description": "query"}],
+        )
+    )
+
+    assert out.stop_reason != "sufficient_evidence"
+    assert out.stop_reason == "plan_exhausted"

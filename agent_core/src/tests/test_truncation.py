@@ -17,9 +17,9 @@ def test_truncation_keeps_recent_items_within_budget():
 
 def test_truncation_drops_oldest_first():
     history = [
-        HistoryItem(role="user", type="query", content="old" * 30),
-        HistoryItem(role="assistant", type="plan", content="mid" * 10),
-        HistoryItem(role="tool", type="tool_result", content="new" * 10),
+        HistoryItem(role="user", type="query", content=("old " * 30).strip()),
+        HistoryItem(role="assistant", type="plan", content=("mid " * 10).strip()),
+        HistoryItem(role="tool", type="tool_result", content=("new " * 10).strip()),
     ]
 
     truncated = truncate_history(history, max_tokens=18)

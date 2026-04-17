@@ -65,6 +65,7 @@ OUTPUT_SCHEMA = {
             "type": "array",
             "items": {"type": "string"},
         },
+        "source": {"type": "string", "enum": ["db"]},
     },
     "required": ["valid", "summary", "materials", "validation_errors"],
     "additionalProperties": False,

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from contracts.tool_result import ToolResult, ToolSource, ToolStatus
+
 
 PlanStatus = Literal["active", "completed", "exhausted"]
-ToolStatus = Literal["success", "error"]
 
 
 class PlanStep(BaseModel):
@@ -29,18 +30,15 @@ class Plan(BaseModel):
         return self
 
 
-class ToolResult(BaseModel):
-    status: ToolStatus
-    raw_output: dict[str, Any] = Field(default_factory=dict)
-    structured_output: dict[str, Any] = Field(default_factory=dict)
-    error_message: str | None = None
-
-
 class EvaluatorFeedback(BaseModel):
     stop: bool
     constraints_ok: bool = False
     modify_plan: bool
     feedback: str = ""
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    domain_valid: bool = True
+    domain_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    domain_issues: list[str] = Field(default_factory=list)
 
 
 class EvaluationResult(BaseModel):
@@ -48,6 +46,10 @@ class EvaluationResult(BaseModel):
     modify_plan: bool
     constraints_ok: bool
     reason: str = ""
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    domain_valid: bool = True
+    domain_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    domain_issues: list[str] = Field(default_factory=list)
 
     @property
     def feedback(self) -> str:

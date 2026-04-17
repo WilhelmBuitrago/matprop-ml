@@ -25,6 +25,10 @@ PLANNER_MODEL = _resolve_model("AGENT_PLANNER_MODEL", PLANNING_EVALUATOR_MODEL)
 INSIGHTS_MODEL = _resolve_model("AGENT_INSIGHTS_MODEL", AGENT_BASE_MODEL)
 FINAL_MODEL = _resolve_model("AGENT_FINAL_MODEL", AGENT_BASE_MODEL)
 CIF_MODEL = _resolve_model("AGENT_CIF_MODEL", "WilhelmBuitrago/llamat-3-cif-8b:Q5_K_M")
+DOMAIN_CRITIC_MODEL = _resolve_model(
+    "AGENT_DOMAIN_CRITIC_MODEL",
+    "WilhelmBuitrago/llamat-3-chat-8b:Q5_K_M",
+)
 
 # Backward-compatible dictionary for existing consumers.
 GENERATION_MODELS = {
@@ -43,5 +47,6 @@ ALL_MODELS = sorted(
         PLANNER_MODEL,
         FINAL_MODEL,
         CIF_MODEL,
+        DOMAIN_CRITIC_MODEL,
     }
 )

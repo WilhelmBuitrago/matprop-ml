@@ -1,22 +1,12 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+
+from contracts.tool_result import ToolResult
 
 if TYPE_CHECKING:
     from api.v4.state import AgentState
-
-
-@dataclass(frozen=True)
-class ToolResult:
-    """Normalized tool execution result contract."""
-
-    status: str
-    payload: Dict[str, Any]
-    error_code: str | None = None
-    error_detail: str | None = None
-
 
 class ToolContract:
     """Base interface for deterministic tools."""

@@ -97,3 +97,16 @@ class PlanningEvaluatorOutput(BaseModel):
     constraints_ok: Optional[bool] = None
     modify_plan: Optional[bool] = None
     feedback: str = ""
+
+
+class DomainCriticRequest(BaseModel):
+    user_query: str
+    model_name: str | None = None
+    prompt: str
+    tool_results: List[Dict[str, Any]] = Field(default_factory=list)
+    reasoning_steps: List[str] = Field(default_factory=list)
+    draft_response: str = ""
+
+
+class DomainCriticResponse(BaseModel):
+    response: str

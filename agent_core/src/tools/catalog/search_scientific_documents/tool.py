@@ -90,6 +90,9 @@ class SearchScientificDocumentsTool(ToolContract):
                 payload={},
                 error_code="VALIDATION_ERROR",
                 error_detail="query is required",
+                source="paper",
+                is_synthetic=False,
+                trace="search_scientific_documents:empty_query",
             )
 
         material_focus = kwargs.get("material_focus")
@@ -114,6 +117,9 @@ class SearchScientificDocumentsTool(ToolContract):
                 payload={},
                 error_code="VALIDATION_ERROR",
                 error_detail="No valid providers selected",
+                source="paper",
+                is_synthetic=False,
+                trace="search_scientific_documents:no_valid_providers",
             )
 
         try:
@@ -127,7 +133,19 @@ class SearchScientificDocumentsTool(ToolContract):
             if not unique_docs:
                 logger.info("search_documents success empty_result")
                 return ToolResult(
-                    status="success", payload={"documents": [], "count": 0}
+                    status="success",
+                    payload={
+                        "documents": [],
+                        "count": 0,
+                        "source": "paper",
+                    },
+                    source="paper",
+                    is_synthetic=False,
+                    trace="search_scientific_documents:documents_count=0",
+                    confidence_signals={
+                        "completeness": 0.9,
+                        "consistency": 1.0,
+                    },
                 )
 
             ranked = self._rank_documents(query=query, documents=unique_docs)
@@ -148,11 +166,33 @@ class SearchScientificDocumentsTool(ToolContract):
                 }
                 for doc, score in ranked
             ]
+            trace_refs: list[str] = []
+            for item in payload_documents[:8]:
+                ref = str(
+                    item.get("doi")
+                    or item.get("url")
+                    or item.get("document_id")
+                    or ""
+                ).strip()
+                if ref:
+                    trace_refs.append(ref)
+
+            count = len(payload_documents)
+            completeness = 1.0 if count > 0 else 0.9
             return ToolResult(
                 status="success",
                 payload={
                     "documents": payload_documents,
                     "count": len(payload_documents),
+                    "source": "paper",
+                },
+                source="paper",
+                is_synthetic=False,
+                trace=";".join(trace_refs)
+                or f"search_scientific_documents:documents_count={count}",
+                confidence_signals={
+                    "completeness": completeness,
+                    "consistency": 1.0,
                 },
             )
 
@@ -163,6 +203,9 @@ class SearchScientificDocumentsTool(ToolContract):
                 payload={},
                 error_code="PROVIDER_FAILURE",
                 error_detail=str(exc),
+                source="paper",
+                is_synthetic=False,
+                trace="search_scientific_documents:provider_failure",
             )
         except Exception as exc:  # pragma: no cover
             logger.exception("search_documents unexpected_error")
@@ -171,6 +214,9 @@ class SearchScientificDocumentsTool(ToolContract):
                 payload={},
                 error_code="UNEXPECTED_ERROR",
                 error_detail=str(exc),
+                source="paper",
+                is_synthetic=False,
+                trace="search_scientific_documents:unexpected_error",
             )
 
     def _fetch_all(

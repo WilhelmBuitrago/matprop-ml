@@ -58,11 +58,27 @@ class QueryMaterialsDatabaseTool(ToolContract):
             materials = materials[: request.limit]
             payload_materials = [self._material_to_payload(item) for item in materials]
             logger.info("query_materials success count=%d", len(payload_materials))
+            material_ids = [
+                str(item.get("material_id", "")).strip()
+                for item in payload_materials
+                if str(item.get("material_id", "")).strip()
+            ]
+            trace_value = ";".join(material_ids[:8]) or "materials_count=0"
+            count = len(payload_materials)
+            completeness = 1.0 if count > 0 else 0.9
             return ToolResult(
                 status="success",
                 payload={
                     "materials": payload_materials,
                     "count": len(payload_materials),
+                    "source": "db",
+                },
+                source="db",
+                is_synthetic=False,
+                trace=trace_value,
+                confidence_signals={
+                    "completeness": completeness,
+                    "consistency": 1.0,
                 },
             )
         except QueryValidationError as exc:
@@ -72,6 +88,9 @@ class QueryMaterialsDatabaseTool(ToolContract):
                 payload={},
                 error_code="VALIDATION_ERROR",
                 error_detail=str(exc),
+                source="db",
+                is_synthetic=False,
+                trace="query_materials_database:validation_error",
             )
         except QueryAPIError as exc:
             logger.error("query_materials api_error=%s", exc)
@@ -80,6 +99,9 @@ class QueryMaterialsDatabaseTool(ToolContract):
                 payload={},
                 error_code="API_ERROR",
                 error_detail=str(exc),
+                source="db",
+                is_synthetic=False,
+                trace="query_materials_database:api_error",
             )
         except Exception as exc:  # pragma: no cover
             logger.exception("query_materials unexpected_error")
@@ -88,6 +110,9 @@ class QueryMaterialsDatabaseTool(ToolContract):
                 payload={},
                 error_code="UNEXPECTED_ERROR",
                 error_detail=str(exc),
+                source="db",
+                is_synthetic=False,
+                trace="query_materials_database:unexpected_error",
             )
 
     @staticmethod

@@ -48,6 +48,9 @@ class ValidateMaterialConstraintsTool(ToolContract):
                 payload={},
                 error_code="AGENT_STATE_REQUIRED",
                 error_detail="agent_state must be provided for validation.",
+                source="db",
+                is_synthetic=False,
+                trace="validate_material_constraints:missing_agent_state",
             )
 
         materials = getattr(state, "materials_found", None)
@@ -58,6 +61,9 @@ class ValidateMaterialConstraintsTool(ToolContract):
                 payload={},
                 error_code="NO_MATERIALS_IN_STATE",
                 error_detail="No materials are available in agent state.",
+                source="db",
+                is_synthetic=False,
+                trace="validate_material_constraints:no_materials",
             )
 
         valid_constraints, validation_errors = validate_constraints(constraints)
@@ -71,6 +77,9 @@ class ValidateMaterialConstraintsTool(ToolContract):
                 payload={},
                 error_code="VALIDATION_ERROR",
                 error_detail="; ".join(validation_errors),
+                source="db",
+                is_synthetic=False,
+                trace="validate_material_constraints:constraints_invalid",
             )
 
         material_results = []
@@ -100,6 +109,7 @@ class ValidateMaterialConstraintsTool(ToolContract):
             },
             "materials": material_results,
             "validation_errors": [],
+            "source": "db",
         }
         logger.info(
             "validate_constraints success total=%d passing=%d failing=%d",
@@ -107,4 +117,16 @@ class ValidateMaterialConstraintsTool(ToolContract):
             passing_count,
             failing_count,
         )
-        return ToolResult(status="success", payload=payload)
+        completeness = 1.0 if total_materials > 0 else 0.9
+        consistency = 1.0 if not validation_errors else 0.9
+        return ToolResult(
+            status="success",
+            payload=payload,
+            source="db",
+            is_synthetic=False,
+            trace=f"passing={passing_count};failing={failing_count}",
+            confidence_signals={
+                "completeness": completeness,
+                "consistency": consistency,
+            },
+        )

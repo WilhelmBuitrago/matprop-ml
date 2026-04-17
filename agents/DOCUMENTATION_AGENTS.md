@@ -17,6 +17,7 @@ Este servicio resuelve tareas de IA que otros componentes necesitan, principalme
 Capacidades disponibles:
 - completions generales,
 - planning/evaluator para control de ciclo,
+- domain critic dedicado para validacion fisica/coherencia,
 - extracción de insights desde texto técnico,
 - embeddings,
 - generación y completado de contenido cristalográfico (CIF/spec),
@@ -58,6 +59,18 @@ Endpoint unificado para:
 - `mode="plan"`: crear plan de pasos.
 - `mode="evaluate"`: evaluar si detener, continuar o replanificar.
 
+### `POST /v2/domain-critic`
+Endpoint dedicado para validacion de dominio fisico sobre un borrador de respuesta.
+
+Entrada esperada:
+- `user_query`
+- `tool_results`
+- `reasoning_steps`
+- `draft_response`
+
+Salida:
+- texto plano estructurado (`VALID`, `CONFIDENCE`, `ISSUES`) para ser parseado por `agent_core`.
+
 ### `POST /v2/decision`
 Devuelve una decisión estructurada (`action`, `tool_name`, `tool_arguments`, etc.).
 
@@ -94,9 +107,11 @@ Variables clave:
 - `AGENT_FINAL_MODEL`
 - `AGENT_CIF_MODEL`
 - `AGENT_EMBEDDING_MODEL`
+- `AGENT_DOMAIN_CRITIC_MODEL`
 
 Resumen operativo:
 - `planning-evaluator` usa `AGENT_PLANNING_EVALUATOR_MODEL`.
+- `domain-critic` usa `AGENT_DOMAIN_CRITIC_MODEL`.
 - `completions` usa `AGENT_FINAL_MODEL` (salvo override en request).
 - `insights` usa `AGENT_INSIGHTS_MODEL`.
 - `embeddings` usa `AGENT_EMBEDDING_MODEL`.

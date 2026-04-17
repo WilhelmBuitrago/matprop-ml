@@ -62,7 +62,7 @@ def test_tool_returns_success_with_empty_result_set():
     result = tool.execute(formula="Si", limit=5)
 
     assert result.status == "success"
-    assert result.payload == {"materials": [], "count": 0}
+    assert result.payload == {"materials": [], "count": 0, "source": "db"}
 
 
 def test_tool_returns_validation_error_for_invalid_runtime_ranking_sum():

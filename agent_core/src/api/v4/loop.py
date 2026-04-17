@@ -5,8 +5,12 @@ import asyncio
 import logging
 import re
 
-from .contracts import ToolResult
+from contracts.tool_result import ToolSource
+
+from .confidence import ConfidenceCalculator
+from .contracts import Plan, PlanStep, ToolResult
 from .history_item import HistoryItem
+from .resilience_policy import ResiliencePolicy
 from .runtime_state import RuntimeState
 from .state import AgentState, MaterialHypothesis
 from tools.validator import validate_tool_output
@@ -43,6 +47,12 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
                 metadata={"plan": state.plan.model_dump()},
             )
         )
+
+    resilience_policy = ResiliencePolicy()
+    failed_tools = int(state.constraints.get("tool_failures", 0) or 0)
+    invalid_or_empty_results = int(
+        state.constraints.get("invalid_or_empty_results", 0) or 0
+    )
 
     while True:
         logger.info(
@@ -156,50 +166,117 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
             "tool_result",
             {
                 "status": result.status,
-                "raw_output": result.raw_output,
-                "structured_output": result.structured_output,
+                "payload": result.payload,
+                "error_code": result.error_code,
+                "error_detail": result.error_detail,
                 "error_message": result.error_message,
+                "confidence": result.confidence,
+                "is_synthetic": result.is_synthetic,
+                "trace": result.trace,
+                "source": result.source,
             },
             trace="Tool execution completed",
+            confidence=result.confidence,
         )
         state.history.append(
             HistoryItem(
                 role="tool",
                 type="tool_result",
-                content=str(result.structured_output),
+                content=str(result.payload),
                 metadata={
                     "tool": step.tool,
                     "status": result.status,
+                    "source": result.source,
+                    "confidence": result.confidence,
+                    "is_synthetic": result.is_synthetic,
+                    "trace": result.trace,
+                    "error_code": result.error_code,
+                    "error_detail": result.error_detail,
                     "error_message": result.error_message,
-                    "raw_output": result.raw_output,
-                    "structured_output": result.structured_output,
+                    "payload": result.payload,
                 },
             )
         )
 
         if result.status != "success":
             state.runtime_state.mark_step_failed(step_idx)
-            state.set_stop_reason("tool_validation_failed")
+            failed_tools += 1
+            state.constraints["tool_failures"] = failed_tools
+
+            level3 = resilience_policy.level3_for_tool_failures(
+                failed_tools=failed_tools,
+                invalid_or_empty_results=invalid_or_empty_results,
+            )
+            if level3 is not None:
+                state.constraints["resilience_level"] = level3.level
+                state.constraints["resilience_action"] = level3.action
+                state.constraints["resilience_reason"] = level3.reason
+                state.constraints["resilience_details"] = dict(level3.details)
+                state.set_stop_reason("tool_validation_failed")
+                logger.warning(
+                    "loop_stop request_id=%s reason=%s tool=%s error=%s",
+                    state.request_id,
+                    state.stop_reason_canonical,
+                    step.tool,
+                    result.error_message,
+                )
+                await emitter.emit(
+                    "stop",
+                    {
+                        "reason": state.stop_reason,
+                        "tool": step.tool,
+                        "error": result.error_message,
+                        "resilience": {
+                            "level": level3.level,
+                            "action": level3.action,
+                            "details": level3.details,
+                        },
+                    },
+                    trace="Tool execution error: direct final fallback",
+                )
+                break
+
             logger.warning(
-                "loop_stop request_id=%s reason=%s tool=%s error=%s",
+                "loop_tool_failed_continue request_id=%s tool=%s error=%s failed_tools=%d",
                 state.request_id,
-                state.stop_reason_canonical,
                 step.tool,
                 result.error_message,
+                failed_tools,
             )
-            await emitter.emit(
-                "stop",
-                {
-                    "reason": state.stop_reason,
-                    "tool": step.tool,
-                    "error": result.error_message,
-                },
-                trace="Tool execution error",
+            state.plan.cursor += 1
+            state.refresh_runtime_counts()
+            continue
+
+        if _is_empty_or_invalid_payload(result.payload):
+            invalid_or_empty_results += 1
+            state.constraints["invalid_or_empty_results"] = invalid_or_empty_results
+            level3 = resilience_policy.level3_for_tool_failures(
+                failed_tools=failed_tools,
+                invalid_or_empty_results=invalid_or_empty_results,
             )
-            break
+            if level3 is not None:
+                state.constraints["resilience_level"] = level3.level
+                state.constraints["resilience_action"] = level3.action
+                state.constraints["resilience_reason"] = level3.reason
+                state.constraints["resilience_details"] = dict(level3.details)
+                state.set_stop_reason("tool_validation_failed")
+                await emitter.emit(
+                    "stop",
+                    {
+                        "reason": state.stop_reason,
+                        "tool": step.tool,
+                        "resilience": {
+                            "level": level3.level,
+                            "action": level3.action,
+                            "details": level3.details,
+                        },
+                    },
+                    trace="Tool payload invalid/empty: direct final fallback",
+                )
+                break
 
         state.runtime_state.mark_step_done(step_idx, step.tool)
-        apply_tool_result(state, step.tool, result.structured_output)
+        apply_tool_result(state, step.tool, result.payload)
         state.refresh_runtime_counts()
 
         try:
@@ -221,11 +298,25 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
         feedback_reason = str(
             getattr(feedback, "reason", getattr(feedback, "feedback", ""))
         ).strip()
+
+        if not bool(getattr(feedback, "domain_valid", True)):
+            feedback.stop = False
+            feedback.modify_plan = True
+
         state.evaluations.append(feedback.model_dump())
         await emitter.emit(
             "evaluation",
             feedback.model_dump(),
             trace=feedback_reason,
+            confidence=getattr(feedback, "confidence", None),
+        )
+        state.history.append(
+            HistoryItem(
+                role="assistant",
+                type="evaluation",
+                content=feedback_reason,
+                metadata=feedback.model_dump(),
+            )
         )
 
         if feedback.stop and feedback.constraints_ok:
@@ -254,22 +345,70 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
                 feedback=feedback_reason,
             )
             if planner_outcome.plan is None:
-                state.set_stop_reason("planner_failed")
-                logger.warning(
-                    "loop_stop request_id=%s reason=%s fallback=%s",
-                    state.request_id,
-                    state.stop_reason_canonical,
-                    planner_outcome.fallback_reason,
+                level2 = resilience_policy.level2_for_planner_failure(
+                    state.query,
+                    planner_outcome.fallback_reason or "planner_failed",
                 )
+                state.plan = _build_level2_fallback_plan(
+                    query=state.query,
+                    selected_tool=str(level2.details.get("selected_tool", "query_materials_database")),
+                )
+                state.constraints["resilience_level"] = level2.level
+                state.constraints["resilience_action"] = level2.action
+                state.constraints["resilience_reason"] = level2.reason
+                state.constraints["resilience_details"] = dict(level2.details)
+                state.replans_used += 1
+                state.sync_execution_state()
+                state.runtime_state = RuntimeState(
+                    plan_steps=[step.model_dump() for step in state.plan.steps]
+                )
+                state.refresh_runtime_counts()
                 await emitter.emit(
-                    "stop",
+                    "plan_modified",
                     {
-                        "reason": state.stop_reason,
-                        "details": planner_outcome.fallback_reason,
+                        "plan": state.plan.model_dump(),
+                        "resilience": {
+                            "level": level2.level,
+                            "action": level2.action,
+                            "details": level2.details,
+                        },
                     },
-                    trace="Planner failed during replan",
+                    trace="Planner failed during replan: deterministic fallback plan",
                 )
-                break
+                continue
+
+            if planner_outcome.fallback_reason == "invalid_plan":
+                level2 = resilience_policy.level2_for_planner_failure(
+                    state.query,
+                    "invalid_plan",
+                )
+                state.plan = _build_level2_fallback_plan(
+                    query=state.query,
+                    selected_tool=str(level2.details.get("selected_tool", "query_materials_database")),
+                )
+                state.constraints["resilience_level"] = level2.level
+                state.constraints["resilience_action"] = level2.action
+                state.constraints["resilience_reason"] = level2.reason
+                state.constraints["resilience_details"] = dict(level2.details)
+                state.replans_used += 1
+                state.sync_execution_state()
+                state.runtime_state = RuntimeState(
+                    plan_steps=[step.model_dump() for step in state.plan.steps]
+                )
+                state.refresh_runtime_counts()
+                await emitter.emit(
+                    "plan_modified",
+                    {
+                        "plan": state.plan.model_dump(),
+                        "resilience": {
+                            "level": level2.level,
+                            "action": level2.action,
+                            "details": level2.details,
+                        },
+                    },
+                    trace="Invalid replan recovered with deterministic fallback plan",
+                )
+                continue
 
             state.plan = planner_outcome.plan
             state.replans_used += 1
@@ -278,12 +417,6 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
                 plan_steps=[step.model_dump() for step in state.plan.steps]
             )
             state.refresh_runtime_counts()
-
-            if planner_outcome.fallback_reason == "invalid_plan":
-                state.constraints["invalid_plan_recovered"] = True
-                state.constraints["invalid_plan_recovery_count"] = (
-                    int(state.constraints.get("invalid_plan_recovery_count", 0)) + 1
-                )
 
             state.history.append(
                 HistoryItem(
@@ -319,15 +452,23 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
 async def _execute_tool(
     registry, state: AgentState, tool_name: str, target: str | None
 ) -> ToolResult:
+    calculator = ConfidenceCalculator()
+    default_source = _default_source_for_tool(tool_name)
+    default_is_synthetic = default_source in {"rag", "llm"}
+
     arguments = _build_tool_arguments(tool_name=tool_name, target=target, state=state)
 
     ok, error = registry.validate_input(tool_name, arguments)
     if not ok:
         return ToolResult(
             status="error",
-            raw_output={"validation_stage": "input", "validation_error": error},
-            structured_output={},
-            error_message=f"input_validation_failed: {error}",
+            payload={"validation_stage": "input", "validation_error": error},
+            error_code="INPUT_VALIDATION_ERROR",
+            error_detail=f"input_validation_failed: {error}",
+            confidence=0.0,
+            is_synthetic=default_is_synthetic,
+            trace=f"{tool_name}:input_validation",
+            source=default_source,
         )
 
     tool = registry.get(tool_name)
@@ -340,19 +481,31 @@ async def _execute_tool(
     except Exception as exc:
         return ToolResult(
             status="error",
-            raw_output={},
-            structured_output={},
-            error_message=str(exc),
+            payload={},
+            error_code="EXECUTION_ERROR",
+            error_detail=str(exc),
+            confidence=0.0,
+            is_synthetic=default_is_synthetic,
+            trace=f"{tool_name}:exception",
+            source=default_source,
         )
 
     if getattr(native_result, "status", "error") != "success":
+        native_source = getattr(native_result, "source", default_source)
+        confidence_signals = getattr(native_result, "confidence_signals", {}) or {}
         return ToolResult(
             status="error",
-            raw_output=getattr(native_result, "payload", {}),
-            structured_output={},
-            error_message=getattr(native_result, "error_detail", None)
-            or getattr(native_result, "error_code", None)
-            or "tool_error",
+            payload=getattr(native_result, "payload", {}) or {},
+            error_code=getattr(native_result, "error_code", None) or "TOOL_ERROR",
+            error_detail=getattr(native_result, "error_detail", None),
+            confidence=0.0,
+            is_synthetic=bool(
+                getattr(native_result, "is_synthetic", native_source in {"rag", "llm"})
+            ),
+            trace=getattr(native_result, "trace", None)
+            or f"{tool_name}:error",
+            source=native_source,
+            confidence_signals=confidence_signals,
         )
 
     payload = getattr(native_result, "payload", {}) or {}
@@ -360,9 +513,13 @@ async def _execute_tool(
     if not out_ok:
         return ToolResult(
             status="error",
-            raw_output={"validation_stage": "output", "payload": payload},
-            structured_output={},
-            error_message=f"output_validation_failed: {out_error}",
+            payload={"validation_stage": "output", "payload": payload},
+            error_code="OUTPUT_VALIDATION_ERROR",
+            error_detail=f"output_validation_failed: {out_error}",
+            confidence=0.0,
+            is_synthetic=default_is_synthetic,
+            trace=f"{tool_name}:output_validation",
+            source=default_source,
         )
 
     tool = registry.get(tool_name)
@@ -370,16 +527,144 @@ async def _execute_tool(
     if output_schema and not validate_tool_output(payload, output_schema):
         return ToolResult(
             status="error",
-            raw_output={"validation_stage": "output", "payload": payload},
-            structured_output={},
-            error_message="output_validation_failed: schema_mismatch",
+            payload={"validation_stage": "output", "payload": payload},
+            error_code="OUTPUT_VALIDATION_ERROR",
+            error_detail="output_validation_failed: schema_mismatch",
+            confidence=0.0,
+            is_synthetic=default_is_synthetic,
+            trace=f"{tool_name}:schema_mismatch",
+            source=default_source,
         )
+
+    source = getattr(native_result, "source", default_source)
+    is_synthetic = bool(
+        getattr(native_result, "is_synthetic", source in {"rag", "llm"})
+    )
+    trace = getattr(native_result, "trace", None) or _build_default_trace(tool_name, payload)
+    confidence_signals = getattr(native_result, "confidence_signals", {}) or {}
+    explicit_confidence = getattr(native_result, "confidence", None)
+    if isinstance(explicit_confidence, (int, float)) and explicit_confidence <= 0.0:
+        explicit_confidence = None
+    confidence = calculator.calculate(
+        source=source,
+        status="success",
+        payload=payload,
+        signals=confidence_signals,
+        explicit_confidence=(
+            float(explicit_confidence)
+            if isinstance(explicit_confidence, (int, float))
+            else None
+        ),
+    )
 
     return ToolResult(
         status="success",
-        raw_output=payload,
-        structured_output=payload,
-        error_message=None,
+        payload=payload,
+        error_code=getattr(native_result, "error_code", None),
+        error_detail=getattr(native_result, "error_detail", None),
+        confidence=confidence,
+        is_synthetic=is_synthetic,
+        trace=trace,
+        source=source,
+        confidence_signals=confidence_signals,
+    )
+
+
+def _default_source_for_tool(tool_name: str) -> ToolSource:
+    if tool_name == "query_materials_database":
+        return "db"
+    if tool_name == "validate_material_constraints":
+        return "db"
+    if tool_name == "search_scientific_documents":
+        return "paper"
+    if tool_name == "document_rag":
+        return "rag"
+    if tool_name == "generate_crystal_structure":
+        return "llm"
+    return "db"
+
+
+def _build_default_trace(tool_name: str, payload: dict[str, Any]) -> str:
+    if tool_name == "query_materials_database":
+        return f"materials_count={len(payload.get('materials', []))}"
+    if tool_name == "validate_material_constraints":
+        summary = payload.get("summary", {})
+        if isinstance(summary, dict):
+            return (
+                f"passing={summary.get('passing_count', 0)};"
+                f"failing={summary.get('failing_count', 0)}"
+            )
+    if tool_name == "search_scientific_documents":
+        docs = payload.get("documents", [])
+        if isinstance(docs, list):
+            refs = []
+            for item in docs[:5]:
+                if not isinstance(item, dict):
+                    continue
+                ref = str(item.get("doi") or item.get("url") or item.get("document_id") or "").strip()
+                if ref:
+                    refs.append(ref)
+            return ";".join(refs) if refs else f"documents_count={len(docs)}"
+    if tool_name == "document_rag":
+        results = payload.get("results", [])
+        if isinstance(results, list):
+            refs = []
+            for item in results[:8]:
+                if not isinstance(item, dict):
+                    continue
+                ref = str(item.get("doi") or item.get("url") or item.get("document_id") or "").strip()
+                if ref:
+                    refs.append(ref)
+            return ";".join(refs) if refs else f"results_count={len(results)}"
+    if tool_name == "generate_crystal_structure":
+        metadata = payload.get("metadata", {})
+        if isinstance(metadata, dict):
+            return str(metadata.get("formula") or "generated_structure")
+    return tool_name
+
+
+def _is_empty_or_invalid_payload(payload: dict[str, Any]) -> bool:
+    if not payload:
+        return True
+    count = payload.get("count")
+    if isinstance(count, int) and count <= 0:
+        return True
+    for key in ("materials", "documents", "results"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return len(value) == 0
+    return False
+
+
+def _build_level2_fallback_plan(*, query: str, selected_tool: str) -> Plan:
+    if selected_tool == "document_rag":
+        return Plan(
+            steps=[
+                PlanStep(
+                    tool="search_scientific_documents",
+                    target=query,
+                    purpose="Collect literature candidates for deterministic RAG fallback",
+                ),
+                PlanStep(
+                    tool="document_rag",
+                    target=query,
+                    purpose="Extract evidence from retrieved papers in deterministic fallback",
+                ),
+            ],
+            cursor=0,
+            status="active",
+        )
+
+    return Plan(
+        steps=[
+            PlanStep(
+                tool="query_materials_database",
+                target=_guess_formula(query),
+                purpose="Deterministic property lookup fallback",
+            )
+        ],
+        cursor=0,
+        status="active",
     )
 
 

@@ -6,6 +6,7 @@ import os
 from typing import Any, List
 
 from models import (
+    DOMAIN_CRITIC_MODEL,
     EMBEDDING_MODEL,
     INSIGHTS_MODEL,
     PLANNING_EVALUATOR_MODEL,
@@ -20,12 +21,15 @@ from services import (
 )
 from .models import (
     DecisionModel,
+    DomainCriticModel,
     InsightsModel,
     PlanningEvaluatorModel,
 )
 from .scheme import (
     DecisionModelInput,
     DecisionModelOutput,
+    DomainCriticRequest,
+    DomainCriticResponse,
     PlanningEvaluatorOutput,
     PlanningEvaluatorRequest,
 )
@@ -61,6 +65,10 @@ class V2RuntimeServices:
         )
         self.planning_evaluator = PlanningEvaluatorService(
             model_name=PLANNING_EVALUATOR_MODEL,
+            ollama_client=self.ollama_client,
+        )
+        self.domain_critic = DomainCriticService(
+            model_name=DOMAIN_CRITIC_MODEL,
             ollama_client=self.ollama_client,
         )
         self.insights = InsightsService(
@@ -117,6 +125,19 @@ class PlanningEvaluatorService:
         )
 
     def call(self, payload: PlanningEvaluatorRequest) -> PlanningEvaluatorOutput:
+        return self._model.call(payload)
+
+
+class DomainCriticService:
+    """Domain critic wrapper around dedicated model and endpoint."""
+
+    def __init__(self, model_name: str, ollama_client: OllamaClient) -> None:
+        self._model = DomainCriticModel(
+            model_name=model_name,
+            ollama_client=ollama_client,
+        )
+
+    def call(self, payload: DomainCriticRequest) -> DomainCriticResponse:
         return self._model.call(payload)
 
 

@@ -75,6 +75,13 @@ def fake_requests_post(monkeypatch):
 
             return _Resp({"steps": []})
 
+        if url.endswith("/v2/domain-critic"):
+            return _Resp(
+                {
+                    "response": "VALID: yes\nCONFIDENCE: 0.92\nISSUES:\n- none"
+                }
+            )
+
         if url.endswith("/v2/insights"):
             return _Resp({"insights": ["Fact A", "Fact B"]})
 

@@ -58,6 +58,7 @@ OUTPUT_SCHEMA = {
             },
         },
         "count": {"type": "integer", "minimum": 0},
+        "source": {"type": "string", "enum": ["paper"]},
     },
     "required": ["documents", "count"],
     "additionalProperties": False,

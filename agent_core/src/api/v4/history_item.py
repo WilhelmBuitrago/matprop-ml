@@ -8,6 +8,8 @@ HISTORY_TYPES = [
     "plan",
     "tool_call",
     "tool_result",
+    "evaluation",
+    "domain_critic",
 ]
 
 
