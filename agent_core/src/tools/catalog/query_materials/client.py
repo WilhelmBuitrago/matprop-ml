@@ -63,6 +63,16 @@ class MaterialsProjectClient:
         return MPRester
 
     def _read_api_key(self) -> str:
+        # Try to get API key from centralized configuration first
+        try:
+            from common.config import config
+            api_key = config.get("external_apis.mp_api_key")
+            if api_key:
+                return api_key
+        except Exception:
+            pass  # Fall back to environment variables if config not available
+        
+        # Fallback to environment variables for backward compatibility
         api_key = os.getenv("MP_API_KEY")
         if api_key:
             return api_key
@@ -73,7 +83,7 @@ class MaterialsProjectClient:
             if api_key:
                 return api_key
 
-        raise QueryValidationError("MP_API_KEY is missing in environment or .env file.")
+        raise QueryValidationError("MP_API_KEY is missing in configuration or environment.")
 
     @staticmethod
     def _read_api_key_from_env_file(path: Path) -> str | None:

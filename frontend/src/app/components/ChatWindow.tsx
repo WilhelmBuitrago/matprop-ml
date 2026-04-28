@@ -12,26 +12,18 @@ const resolveChatEndpoint = () => {
   while (trimmedBase.endsWith("/")) {
     trimmedBase = trimmedBase.slice(0, -1);
   }
-  const versionPath = "/v2/completions";
-  return trimmedBase ? `${trimmedBase}${versionPath}` : versionPath;
+  return trimmedBase ? `${trimmedBase}/v1/completions` : "/v1/completions";
 };
 
 interface Message {
-  id: string;
   text: string;
   sender: "user" | "agent" | "system";
-  mode?: "v2";
-  kind?: "default" | "thinking" | "status";
 }
 
 export default function ChatWindow() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
-  const [moreContextEnabled, setMoreContextEnabled] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
-
-  const createMessageId = () =>
-    `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   // Keep the latest message in view as the list grows.
   useEffect(() => {
@@ -41,130 +33,34 @@ export default function ChatWindow() {
   const hasUserMessage = messages.some(message => message.sender === "user");
 
   const sendMessage = async (text: string) => {
-    const mode: "v2" = "v2";
-    const userMessage: Message = { id: createMessageId(), text, sender: "user" };
-    setMessages(prev => [...prev, userMessage]);
+    const userMessage: Message = { text, sender: "user" };
+    const updatedHistory = [...messages, userMessage];
+    setMessages(updatedHistory);
     setLoading(true);
 
     try {
       const endpoint = resolveChatEndpoint();
-
-      let responseText = "";
-
-      const statusId = createMessageId();
-      setMessages(prev => [
-        ...prev,
-        {
-          id: statusId,
-          text: "Iniciando analisis del contexto...",
-          sender: "agent",
-          mode: "v2",
-          kind: "status",
-        },
-      ]);
-
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "text/event-stream",
-        },
-        body: JSON.stringify({ prompt: text, stream: true }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: text }),
       });
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
 
-      if (!response.body) {
-        throw new Error("Streaming body not available");
+      const data = await response.json();
+      if (!data?.choices?.length) {
+        throw new Error("Invalid completion response");
       }
 
-      const decoder = new TextDecoder("utf-8");
-      const reader = response.body.getReader();
-      let buffer = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) {
-          break;
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-        buffer = buffer.replace(/\r/g, "");
-
-        let eventSeparator = buffer.indexOf("\n\n");
-        while (eventSeparator !== -1) {
-          const rawEvent = buffer.slice(0, eventSeparator);
-          buffer = buffer.slice(eventSeparator + 2);
-
-          const lines = rawEvent.split("\n");
-          let eventType = "message";
-          const dataLines: string[] = [];
-
-          for (const line of lines) {
-            if (line.startsWith("event:")) {
-              eventType = line.slice("event:".length).trim();
-            }
-            if (line.startsWith("data:")) {
-              dataLines.push(line.slice("data:".length).trim());
-            }
-          }
-
-          if (dataLines.length > 0) {
-            try {
-              const payload = JSON.parse(dataLines.join(""));
-              if (eventType === "status" && payload?.text) {
-                setMessages(prev =>
-                  prev.map(message =>
-                    message.id === statusId
-                      ? {
-                          ...message,
-                          text: String(payload.text),
-                        }
-                      : message
-                  )
-                );
-              }
-
-              if (eventType === "final" && payload?.text) {
-                responseText = String(payload.text);
-              }
-            } catch {
-              // Ignore malformed chunks and keep reading stream events.
-            }
-          }
-
-          eventSeparator = buffer.indexOf("\n\n");
-        }
-      }
-
-      setMessages(prev =>
-        prev.map(message =>
-          message.id === statusId
-            ? {
-                id: statusId,
-                text: "",
-                sender: "agent",
-                mode: "v2",
-                kind: "default",
-              }
-            : message
-        )
-      );
+      const responseText: string = data.choices[0].text;
 
       if (!responseText) {
         setMessages(prev => [
-          ...prev.filter(message => {
-            return !(
-              message.sender === "agent" &&
-              message.mode === mode &&
-              message.kind === "default" &&
-              message.text.length === 0
-            );
-          }),
+          ...prev,
           {
-            id: createMessageId(),
             text: "No se recibió respuesta del modelo.",
             sender: "system",
           },
@@ -172,33 +68,22 @@ export default function ChatWindow() {
         return;
       }
 
-      const CHUNK_SIZE = 16;
-      const CHUNK_DELAY_MS = 40;
+      const agentMessage: Message = { text: "", sender: "agent" };
+      setMessages(prev => [...prev, agentMessage]);
 
-      for (let index = 0; index < responseText.length; index += CHUNK_SIZE) {
-        const chunk = responseText.slice(index, index + CHUNK_SIZE);
-        await new Promise(resolve => setTimeout(resolve, CHUNK_DELAY_MS));
+      for (const char of responseText) {
+        await new Promise(resolve => setTimeout(resolve, 12));
         setMessages(prev => {
-          const next = [...prev];
-          for (let reverseIndex = next.length - 1; reverseIndex >= 0; reverseIndex -= 1) {
-            const candidate = next[reverseIndex];
-            if (candidate.sender !== "agent" || candidate.mode !== mode) {
-              continue;
-            }
-            next[reverseIndex] = {
-              ...candidate,
-              kind: "default",
-              text: `${candidate.text}${chunk}`,
-            };
-            return next;
+          if (prev.length === 0) {
+            return prev;
           }
-          next.push({
-            id: createMessageId(),
-            sender: "agent",
-            mode,
-            kind: "default",
-            text: chunk,
-          });
+          const next = [...prev];
+          const lastIndex = next.length - 1;
+          const last = next[lastIndex];
+          if (last.sender !== "agent") {
+            return prev;
+          }
+          next[lastIndex] = { ...last, text: `${last.text}${char}` };
           return next;
         });
       }
@@ -207,7 +92,6 @@ export default function ChatWindow() {
       setMessages(prev => [
         ...prev,
         {
-          id: createMessageId(),
           text: "Error al contactar al agente. Por favor intenta nuevamente.",
           sender: "system",
         },
@@ -234,24 +118,14 @@ export default function ChatWindow() {
 
           <div className="messages" role="log" aria-live="polite">
             {messages.map((message, index) => (
-              <div className="message-item" key={message.id || `${index}-${message.sender}`}>
-                <ChatMessage
-                  kind={message.kind}
-                  message={message.text}
-                  mode={message.mode}
-                  sender={message.sender}
-                />
+              <div className="message-item" key={`${index}-${message.sender}-${message.text.length}`}>
+                <ChatMessage message={message.text} sender={message.sender} />
               </div>
             ))}
             <div ref={bottomRef} />
           </div>
 
-          <ChatInput
-            disabled={loading}
-            moreContextEnabled={moreContextEnabled}
-            onSend={sendMessage}
-            onToggleMoreContext={() => setMoreContextEnabled(previous => !previous)}
-          />
+          <ChatInput disabled={loading} onSend={sendMessage} />
         </section>
       </div>
 

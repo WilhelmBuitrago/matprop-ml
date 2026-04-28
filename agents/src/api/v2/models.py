@@ -1,8 +1,16 @@
+"""Model implementations for v2 API endpoints."""
+
 import json
+import logging
 import re
 from typing import Any, Dict, List
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from providers.base import LLMProvider
 
 from services.ollama_client import OllamaClient
+from providers.base import LLMProvider
 
 from .scheme import (
     DecisionModelInput,
@@ -14,59 +22,119 @@ from .scheme import (
     PlanningStep,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _extract_json_dict(raw: str) -> Dict[str, Any]:
+    """
+    Extract JSON dictionary from raw model output.
+    
+    Args:
+        raw: Raw model output text
+        
+    Returns:
+        Parsed JSON dictionary
+        
+    Raises:
+        ValueError: If no valid JSON object found
+    """
     text = (raw or "").strip()
-
+    logger.debug("Extracting JSON from raw text (length=%d)", len(text))
+    
+    # Try fenced code blocks first
     fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
     if fenced:
         text = fenced.group(1).strip()
-
+        logger.debug("Found fenced JSON block")
+    
+    # Find first and last braces
     first = text.find("{")
     last = text.rfind("}")
     if first == -1 or last == -1 or last < first:
+        logger.error("No valid JSON object found in output")
         raise ValueError("Model output does not contain a JSON object")
-
+    
     candidate = text[first : last + 1]
-    parsed = json.loads(candidate)
-    if not isinstance(parsed, dict):
-        raise ValueError("Model output JSON must be an object")
-    return parsed
+    try:
+        parsed = json.loads(candidate)
+        if not isinstance(parsed, dict):
+            logger.error("Parsed JSON is not a dictionary: %s", type(parsed))
+            raise ValueError("Model output JSON must be an object")
+        logger.debug("Successfully extracted JSON with %d keys", len(parsed))
+        return parsed
+    except json.JSONDecodeError as e:
+        logger.error("JSON parsing failed: %s", e)
+        raise ValueError(f"Model output does not contain valid JSON: {e}") from e
 
 
 def _safe_json(raw: str) -> Any:
+    """
+    Safely parse JSON from raw text, with fallback patterns.
+    
+    Args:
+        raw: Raw text that may contain JSON
+        
+    Returns:
+        Parsed JSON object or empty list
+    """
     text = (raw or "").strip()
     if not text:
+        logger.debug("Empty input provided to _safe_json")
         return []
+    
+    logger.debug("Attempting to parse JSON from text (length=%d)", len(text))
+    
+    # Direct parsing attempt
     try:
-        return json.loads(text)
+        result = json.loads(text)
+        logger.debug("Direct JSON parsing successful")
+        return result
     except json.JSONDecodeError:
-        pass
-
+        logger.debug("Direct JSON parsing failed, trying pattern matching")
+    
+    # Try list pattern
     list_match = re.search(r"\[(?:.|\n)*\]", text)
     if list_match:
         try:
+            logger.debug("Found list pattern, attempting parse")
             return json.loads(list_match.group(0))
         except json.JSONDecodeError:
-            pass
-
+            logger.debug("List pattern parsing failed")
+    
+    # Try object pattern
     object_match = re.search(r"\{(?:.|\n)*\}", text)
     if object_match:
         try:
+            logger.debug("Found object pattern, attempting parse")
             return json.loads(object_match.group(0))
         except json.JSONDecodeError:
-            pass
+            logger.debug("Object pattern parsing failed")
+    
+    logger.debug("No valid JSON found, returning empty list")
     return []
 
 
 class DecisionModel:
-    def __init__(self, model_name: str, ollama_client: OllamaClient):
+    def __init__(self, model_name: str, llm_provider: 'LLMProvider' = None, ollama_client: OllamaClient = None):
         self.model_name = model_name
-        self.ollama_client = ollama_client
+        # Accept either LLMProvider or OllamaClient for backward compatibility
+        if llm_provider is not None:
+            self.llm_provider = llm_provider
+        elif ollama_client is not None:
+            self.ollama_client = ollama_client
+        else:
+            # Default to OllamaClient for backward compatibility
+            from services.ollama_client import OllamaClient as OllamaClientClass
+            self.ollama_client = OllamaClientClass()
 
     def call(self, payload: DecisionModelInput) -> DecisionModelOutput:
         prompt = self._build_prompt(payload)
-        response = self.ollama_client.chat(
+        # Use llm_provider if available, otherwise fall back to ollama_client
+        provider = getattr(self, 'llm_provider', getattr(self, 'ollama_client', None))
+        if provider is None:
+            raise ValueError("No provider available")
+            
+        response = provider.chat(
             model=self.model_name,
             messages=[
                 {
@@ -138,9 +206,17 @@ Output JSON schema:
 
 
 class PlanningEvaluatorModel:
-    def __init__(self, model_name: str, ollama_client: OllamaClient):
+    def __init__(self, model_name: str, llm_provider: 'LLMProvider' = None, ollama_client: OllamaClient = None):
         self.model_name = model_name
-        self.ollama_client = ollama_client
+        # Accept either LLMProvider or OllamaClient for backward compatibility
+        if llm_provider is not None:
+            self.llm_provider = llm_provider
+        elif ollama_client is not None:
+            self.ollama_client = ollama_client
+        else:
+            # Default to OllamaClient for backward compatibility
+            from services.ollama_client import OllamaClient as OllamaClientClass
+            self.ollama_client = OllamaClientClass()
 
     def call(self, payload: PlanningEvaluatorRequest) -> PlanningEvaluatorOutput:
         if payload.mode == "plan":
@@ -149,7 +225,12 @@ class PlanningEvaluatorModel:
 
     def _plan(self, payload: PlanningEvaluatorRequest) -> PlanningEvaluatorOutput:
         prompt = self._build_planner_prompt(payload)
-        response = self.ollama_client.chat(
+        # Use llm_provider if available, otherwise fall back to ollama_client
+        provider = getattr(self, 'llm_provider', getattr(self, 'ollama_client', None))
+        if provider is None:
+            raise ValueError("No provider available")
+            
+        response = provider.chat(
             model=payload.model_name or self.model_name,
             messages=[
                 {
@@ -173,7 +254,12 @@ class PlanningEvaluatorModel:
 
     def _evaluate(self, payload: PlanningEvaluatorRequest) -> PlanningEvaluatorOutput:
         prompt = self._build_evaluator_prompt(payload)
-        response = self.ollama_client.chat(
+        # Use llm_provider if available, otherwise fall back to ollama_client
+        provider = getattr(self, 'llm_provider', getattr(self, 'ollama_client', None))
+        if provider is None:
+            raise ValueError("No provider available")
+            
+        response = provider.chat(
             model=payload.model_name or self.model_name,
             messages=[
                 {
@@ -346,9 +432,17 @@ Output JSON schema:
 
 
 class InsightsModel:
-    def __init__(self, model_name: str, ollama_client: OllamaClient):
+    def __init__(self, model_name: str, llm_provider: 'LLMProvider' = None, ollama_client: OllamaClient = None):
         self.model_name = model_name
-        self.ollama_client = ollama_client
+        # Accept either LLMProvider or OllamaClient for backward compatibility
+        if llm_provider is not None:
+            self.llm_provider = llm_provider
+        elif ollama_client is not None:
+            self.ollama_client = ollama_client
+        else:
+            # Default to OllamaClient for backward compatibility
+            from services.ollama_client import OllamaClient as OllamaClientClass
+            self.ollama_client = OllamaClientClass()
 
     def call(
         self,
@@ -369,7 +463,12 @@ class InsightsModel:
             chunk=chunk,
             max_items=max_items,
         )
-        response = self.ollama_client.chat(
+        # Use llm_provider if available, otherwise fall back to ollama_client
+        provider = getattr(self, 'llm_provider', getattr(self, 'ollama_client', None))
+        if provider is None:
+            raise ValueError("No provider available")
+            
+        response = provider.chat(
             model=self.model_name,
             messages=[{"role": "user", "content": prompt}],
             options={"temperature": 0.1, "num_predict": max_tokens},
@@ -410,13 +509,26 @@ class InsightsModel:
 
 
 class DomainCriticModel:
-    def __init__(self, model_name: str, ollama_client: OllamaClient):
+    def __init__(self, model_name: str, llm_provider: 'LLMProvider' = None, ollama_client: OllamaClient = None):
         self.model_name = model_name
-        self.ollama_client = ollama_client
+        # Accept either LLMProvider or OllamaClient for backward compatibility
+        if llm_provider is not None:
+            self.llm_provider = llm_provider
+        elif ollama_client is not None:
+            self.ollama_client = ollama_client
+        else:
+            # Default to OllamaClient for backward compatibility
+            from services.ollama_client import OllamaClient as OllamaClientClass
+            self.ollama_client = OllamaClientClass()
 
     def call(self, payload: DomainCriticRequest) -> DomainCriticResponse:
         prompt = self._build_prompt(payload)
-        response = self.ollama_client.chat(
+        # Use llm_provider if available, otherwise fall back to ollama_client
+        provider = getattr(self, 'llm_provider', getattr(self, 'ollama_client', None))
+        if provider is None:
+            raise ValueError("No provider available")
+            
+        response = provider.chat(
             model=payload.model_name or self.model_name,
             messages=[
                 {
@@ -431,13 +543,3 @@ class DomainCriticModel:
         if not raw:
             raw = "VALID: no\nCONFIDENCE: 0.0\nISSUES:\n- empty_domain_critic_response"
         return DomainCriticResponse(response=raw)
-
-    def _build_prompt(self, payload: DomainCriticRequest) -> str:
-        return (
-            f"{payload.prompt}\n\n"
-            "INPUT:\n"
-            f"user_query={json.dumps(payload.user_query, ensure_ascii=True)}\n"
-            f"tool_results={json.dumps(payload.tool_results, ensure_ascii=True)}\n"
-            f"reasoning_steps={json.dumps(payload.reasoning_steps, ensure_ascii=True)}\n"
-            f"draft_response={json.dumps(payload.draft_response, ensure_ascii=True)}\n"
-        )

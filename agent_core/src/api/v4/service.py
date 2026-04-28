@@ -19,6 +19,7 @@ from .resilience_policy import ResiliencePolicy
 from .loop import run_loop
 from .model_io import clean_model_response, extract_model_text, messages_to_history
 from .planner import DeepSeekOneShotPlanner, PlannerOutcome
+from .pre_planner_decision import PrePlannerDecisionMaker
 from .scheme import CompletionRequestV4, CompletionResponseV4
 from .state import AgentState, BudgetState
 from .trace import TraceEmitter
@@ -35,6 +36,9 @@ FINAL_SYSTEM_PROMPT = (
 logger = logging.getLogger(__name__)
 
 LEVEL3_FALLBACK_MODEL = "WilhelmBuitrago/llamat-3-chat-8b:Q5_K_M"
+AGENT_FINAL_MODEL = os.getenv(
+    "AGENT_FINAL_MODEL", "WilhelmBuitrago/llamat-3-chat-8b:Q5_K_M"
+)
 
 
 class PlannedRuntimeV4:
@@ -42,6 +46,7 @@ class PlannedRuntimeV4:
         self.trace_dir = trace_dir
         self.trace_dir.mkdir(parents=True, exist_ok=True)
         self.entry_policy = EntryPolicyV4()
+        self.pre_planner = PrePlannerDecisionMaker()
 
     def execute(
         self,
@@ -74,6 +79,22 @@ class PlannedRuntimeV4:
             stream_enabled=stream,
         )
 
+        # ── Pre-planner decision: does the query need external tools? ──
+        pre_planner_route = self.pre_planner.evaluate(query)
+        state.constraints["pre_planner_decision"] = {
+            "calling_tools": pre_planner_route.decision.calling_tools,
+            "confidence": pre_planner_route.decision.confidence,
+            "reasoning": pre_planner_route.decision.reasoning,
+            "route": pre_planner_route.route,
+            "tau": self.pre_planner.tau,
+        }
+
+        if not pre_planner_route.use_tools:
+            # Direct LLM path: skip entry_policy → planner → loop entirely
+            state.set_stop_reason("direct_llm")
+            return state, emitter, PlannerOutcome(plan=None, fallback_reason=None)
+
+        # ── Full pipeline: entry_policy → planner → loop ──
         selected_tool_catalog = self.entry_policy.select_tools(
             query=query,
             registry=registry,
@@ -268,6 +289,45 @@ class PlannedRuntimeV4Service:
             stream=False,
         )
 
+        # ── Direct LLM path: PrePlannerDecision bypassed tools ──
+        if state.stop_reason_canonical == "direct_llm":
+            final_answer, final_error = self._direct_llm_call(
+                query=state.query,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens_for_response,
+            )
+            if final_error:
+                logger.warning(
+                    "direct_llm_failed request_id=%s error=%s",
+                    state.request_id,
+                    final_error,
+                )
+                final_answer = (
+                    "No puedo completar una respuesta confiable en este momento. "
+                    "Intenta nuevamente o reformula la consulta."
+                )
+            state.final_answer = final_answer
+            asyncio.run(
+                emitter.emit(
+                    "final",
+                    {"request_id": state.request_id},
+                    trace="Direct LLM answer generated (pre-planner fast path)",
+                )
+            )
+            logger.info(
+                "chat_v4_end request_id=%s stop_reason=%s route=direct_llm",
+                state.request_id,
+                state.stop_reason_canonical,
+            )
+            final_context = self.runtime.build_query_only_context(state)
+            return self._build_response(
+                state,
+                context=final_context,
+                planner_fallback_reason=None,
+                max_context_tokens=request.max_context_tokens,
+            )
+
+        # ── Full pipeline path ──
         context = self.runtime.build_context(state)
         final_context = context
         if state.stop_reason_canonical == "evaluator_failed":
@@ -350,6 +410,48 @@ class PlannedRuntimeV4Service:
             "start", {"request_id": state.request_id, "query": state.query}
         )
 
+        # ── Direct LLM path: PrePlannerDecision bypassed tools ──
+        if state.stop_reason_canonical == "direct_llm":
+            final_answer, final_error = self._direct_llm_call(
+                query=state.query,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens_for_response,
+            )
+            if final_error:
+                logger.warning(
+                    "direct_llm_failed request_id=%s error=%s",
+                    state.request_id,
+                    final_error,
+                )
+                final_answer = (
+                    "No puedo completar una respuesta confiable en este momento. "
+                    "Intenta nuevamente o reformula la consulta."
+                )
+            state.final_answer = final_answer
+            final_context = self.runtime.build_query_only_context(state)
+            response = self._build_response(
+                state,
+                context=final_context,
+                planner_fallback_reason=None,
+                max_context_tokens=request.max_context_tokens,
+            )
+            asyncio.run(
+                emitter.emit(
+                    "final",
+                    {"request_id": state.request_id, "response": response.model_dump()},
+                    trace="Direct LLM answer generated (pre-planner fast path)",
+                )
+            )
+            for event in emitter.sse_events():
+                yield event
+            logger.info(
+                "chat_v4_stream_end request_id=%s stop_reason=%s route=direct_llm",
+                state.request_id,
+                state.stop_reason_canonical,
+            )
+            return
+
+        # ── Full pipeline path ──
         context = self.runtime.build_context(state)
         final_context = context
         if state.stop_reason_canonical == "evaluator_failed":
@@ -435,6 +537,42 @@ class PlannedRuntimeV4Service:
             "temperature": temperature,
             "max_tokens": max_tokens,
             "model_name": model_name,
+        }
+
+        try:
+            response = requests.post(
+                self.chat_api,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=60,
+            )
+            response.raise_for_status()
+            parsed = response.json()
+            return clean_model_response(extract_model_text(parsed)), None
+        except Exception as exc:
+            return "", str(exc)
+
+    def _direct_llm_call(
+        self,
+        *,
+        query: str,
+        temperature: float,
+        max_tokens: int,
+    ) -> tuple[str, str | None]:
+        """Call AGENT_FINAL_MODEL directly with only the user query (fast path).
+
+        Used when PrePlannerDecision determines no external tools are needed
+        and confidence is above the tau threshold.
+        """
+        messages = [
+            {"role": "system", "content": FINAL_SYSTEM_PROMPT},
+            {"role": "user", "content": query},
+        ]
+        payload = {
+            "history": messages_to_history(messages),
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "model_name": AGENT_FINAL_MODEL,
         }
 
         try:

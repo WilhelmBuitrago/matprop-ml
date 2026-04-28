@@ -52,10 +52,24 @@ class DocumentRAGTool(ToolContract):
 
         self.embeddings_client: AgentsEmbeddingsClient | None = None
         try:
-            agents_url = os.getenv(
-                "AGENTS_SERVICE_URL",
-                os.getenv("AGENTS_URL", "http://agents:8003"),
-            )
+            # Try to get agents URL from centralized configuration first
+            agents_url = None
+            try:
+                from common.config_client import client as config
+                agents_url = config.get("api.host", "http://agents:8003")
+            except Exception:
+                # Fallback for import issues during transition
+                try:
+                    from common.config import config
+                    agents_url = config.get("api.host", "http://agents:8003")
+                except Exception:
+                    pass  # Fall back to environment variables if config not available
+            
+            if not agents_url:
+                agents_url = os.getenv(
+                    "AGENTS_SERVICE_URL",
+                    os.getenv("AGENTS_URL", "http://agents:8003"),
+                )
             self.embeddings_client = AgentsEmbeddingsClient(base_url=agents_url)
         except Exception as exc:  # pragma: no cover
             logger.warning("Embeddings client unavailable: %s", exc)

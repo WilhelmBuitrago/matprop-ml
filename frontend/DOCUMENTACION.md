@@ -119,31 +119,3 @@ Usuario -> ChatInput -> ChatWindow -> Backend /v1/completions -> UI
 
 ## 14. Observabilidad y soporte (si aplica)
 No aplica.
-
-## 15. Actualizacion de arquitectura (2026-03-15)
-- Entorno cliente:
-  - El frontend usa `ENV.API_URL` desde `src/env.client.ts` como unica fuente de configuracion.
-  - Se elimino el acceso directo a `process.env` en paginas utilitarias (`clear`, `history`, `test`).
-  - `NEXT_PUBLIC_API_URL` es obligatorio; si falta, el build/runtime falla de forma explicita.
-- Migracion de `clear_history`:
-  - `clear/page.tsx` invoca primero `POST /v1/clear_history`.
-  - Se mantiene fallback temporal a `GET /v1/clear_history` durante la ventana de deprecacion (1 release).
-- Rendimiento de chat:
-  - Se reemplazo render caracter-a-caracter por actualizacion en chunks temporizados para reducir re-renders en respuestas largas.
-
-## 16. Actualizacion de arquitectura (2026-03-18)
-- Selector de modo en el input:
-  - Se agrego un boton `+` sin fondo integrado a la izquierda del campo de mensaje.
-  - El boton abre un popover con una unica opcion: `More context`.
-  - `More context` se implementa como toggle ON/OFF y persiste durante toda la sesion del chat (no se reinicia por mensaje).
-- Enrutamiento condicional de completions:
-  - Si `More context` esta OFF, el frontend llama a `/v1/completions` (chat simple).
-  - Si `More context` esta ON, el frontend llama a `/v2/completions` (agente completo).
-  - La base del backend sigue resolviendose con `NEXT_PUBLIC_API_URL` y normalizacion de slash final.
-- UX y accesibilidad:
-  - Estado visual seleccionado para `More context` con efecto de hundido, opacidad atenuada y borde blanco tenue.
-  - Cierre del popover por click fuera, tecla Escape y seleccion del toggle.
-  - Atributos ARIA de control (`aria-expanded`, `aria-controls`, `menuitemcheckbox`).
-- Componentes impactados:
-  - `src/app/components/ChatInput.tsx` (boton +, popover, toggle).
-  - `src/app/components/ChatWindow.tsx` (estado persistente del modo y seleccion de endpoint v1/v2).

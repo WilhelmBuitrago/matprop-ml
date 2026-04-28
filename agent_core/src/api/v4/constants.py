@@ -16,6 +16,8 @@ STOP_REASONS: Final[list[str]] = [
     "precondition_failed",
     "planner_failed",
     "controlled_failure",
+    # Pre-planner decision routed query directly to final LLM.
+    "direct_llm",
 ]
 
 LEGACY_STOP_REASON_BY_CANONICAL: Final[dict[str, str]] = {
@@ -30,6 +32,7 @@ LEGACY_STOP_REASON_BY_CANONICAL: Final[dict[str, str]] = {
     "precondition_failed": "precondition_failed",
     "planner_failed": "planner_failed",
     "controlled_failure": "controlled_failure",
+    "direct_llm": "direct_llm",
 }
 
 

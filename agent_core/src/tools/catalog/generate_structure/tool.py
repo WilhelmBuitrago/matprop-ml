@@ -239,8 +239,8 @@ class GenerateCrystalStructureTool(ToolContract):
             generation = self._client.generate(
                 system_message=prompt_bundle.system_message,
                 user_prompt=prompt_bundle.user_prompt,
-                temperature=0.3,
-                max_tokens=900,
+                temperature=self._config.get("models.cif.temperature", 0.3),  # Use centralized config
+                max_tokens=self._config.get("models.cif.max_tokens", 900),  # Use centralized config
                 stop_tokens=["\n\n", "# end"],
                 model_name="WilhelmBuitrago/llamat-3-cif-8b:Q5_K_M",
             )

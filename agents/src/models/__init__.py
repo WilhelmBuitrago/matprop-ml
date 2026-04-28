@@ -12,6 +12,7 @@ from .registry import (
     INSIGHTS_MODEL,
     PLANNING_EVALUATOR_MODEL,
     PLANNER_MODEL,
+    get_fallback_chain,
 )
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "INSIGHTS_MODEL",
     "PLANNING_EVALUATOR_MODEL",
     "PLANNER_MODEL",
+    "get_fallback_chain",
 ]

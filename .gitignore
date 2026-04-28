@@ -218,4 +218,8 @@ llamat2-chat/
 DOCUMENTATION_SCHEMA.md
 Problems.md
 docker-compose-development.yml
-services/
+services/config_service/
+services/evaluation_service/
+specs/
+openspec/
+.atl

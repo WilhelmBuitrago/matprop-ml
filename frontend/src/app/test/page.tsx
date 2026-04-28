@@ -2,14 +2,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ENV } from "@/env.client";
 
 export default function TestPage() {
   const [data, setData] = useState(null);
 
   useEffect(() => {
 
-    fetch(`${ENV.API_URL}/v2/health`)
+    fetch(`${process.env.NEXT_PUBLIC_API_URL}/v1/health`)
       .then(r => r.json())
       .then(setData)
       .catch(console.error);

@@ -53,12 +53,25 @@ class SearchScientificDocumentsTool(ToolContract):
         providers: dict[str, DocumentProvider] | None = None,
         use_embeddings: bool = True,
     ) -> None:
+        # Try to get configuration from centralized config first
+        semantic_scholar_api_key = None
+        crossref_email = None
+        agents_url = None
+        
+        try:
+            from common.config import config
+            semantic_scholar_api_key = config.get("external_apis.semantic_scholar_api_key")
+            crossref_email = config.get("external_apis.crossref_email")
+            agents_url = config.get("api.host", "http://agents:8003")
+        except Exception:
+            pass  # Fall back to environment variables if config not available
+
         self._providers = providers or {
             "arxiv": ArxivProvider(),
             "semantic_scholar": SemanticScholarProvider(
-                api_key=os.getenv("SEMANTIC_SCHOLAR_API_KEY")
+                api_key=semantic_scholar_api_key or os.getenv("SEMANTIC_SCHOLAR_API_KEY")
             ),
-            "crossref": CrossrefProvider(mailto=os.getenv("CROSSREF_EMAIL")),
+            "crossref": CrossrefProvider(mailto=crossref_email or os.getenv("CROSSREF_EMAIL")),
         }
         self._rank_weights = RankWeights()
 
@@ -67,10 +80,11 @@ class SearchScientificDocumentsTool(ToolContract):
         self._embeddings_client: AgentsEmbeddingsClient | None = None
         if use_embeddings:
             try:
-                agents_url = os.getenv(
-                    "AGENTS_SERVICE_URL",
-                    os.getenv("AGENTS_URL", "http://agents:8003"),
-                )
+                if not agents_url:
+                    agents_url = os.getenv(
+                        "AGENTS_SERVICE_URL",
+                        os.getenv("AGENTS_URL", "http://agents:8003"),
+                    )
                 self._embeddings_client = AgentsEmbeddingsClient(base_url=agents_url)
             except Exception as e:
                 logger.warning(

@@ -6,6 +6,7 @@ from typing import Any
 
 import requests
 
+import json
 from .errors import DocumentDownloadError
 
 
@@ -13,7 +14,18 @@ class DocumentDownloader:
     def __init__(self, timeout_seconds: int = 10, max_retries: int = 2) -> None:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
-        self.unpaywall_email = os.getenv("UNPAYWALL_EMAIL", "research@example.com")
+        # Try to get email from centralized configuration first
+        try:
+            from common.config_client import client as config
+            self.unpaywall_email = config.get("external_apis.unpaywall_email", "research@example.com")
+        except Exception:
+            # Fallback to environment variable if config not available
+            # Fallback for import issues during transition
+            try:
+                from common.config import config
+                self.unpaywall_email = config.get("external_apis.unpaywall_email", "research@example.com")
+            except Exception:
+                self.unpaywall_email = os.getenv("UNPAYWALL_EMAIL", "research@example.com")
 
     def fetch_full_document(
         self, document: dict[str, Any]
