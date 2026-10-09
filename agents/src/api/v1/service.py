@@ -243,6 +243,7 @@ class PlanningService:
             return False
 
     def _parse_steps(self, steps: List[PlanStep]) -> List[PlanStep]:
+        logger.info(f"Validating steps: {steps}")
         system = {
             "role": "system",
             "content": (
@@ -322,6 +323,7 @@ class PlanningService:
 
             if all(valids) and len(valids) == len(steps):
                 break
+        logger.info(f"Validated steps: {parsed_steps}")
 
         if parsed_steps[-1].tool != "delegate_to_reasoner":
             parsed_steps.append(

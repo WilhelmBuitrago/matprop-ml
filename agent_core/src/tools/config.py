@@ -10,7 +10,7 @@ AVAILABLES_TOOLS = [
                 "properties": {
                     "query": {
                         "type": "object",
-                        "description": "Search criteria for materials (e.g., material_id, formula, chemsys)",
+                        "description": "Query parameters for searching materials",
                         "properties": {
                             "material": {
                                 "oneOf": [
@@ -39,7 +39,7 @@ AVAILABLES_TOOLS = [
                             },
                             "filters": {
                                 "type": "object",
-                                "description": "Additional filters to refine the search results",
+                                "description": "Additional filters to refine the search results based on material properties",
                                 "properties": {
                                     "band_gap": {
                                         "type": "object",
@@ -129,7 +129,7 @@ AVAILABLES_TOOLS = [
                             },
                             "additionalProperties": False,
                         },
-                        "required": ["material"],
+                        "required": ["material", "filters"],
                         "additionalProperties": False,
                     },
                 },

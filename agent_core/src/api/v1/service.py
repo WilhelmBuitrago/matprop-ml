@@ -1,4 +1,9 @@
 from .scheme import CompletionRequest, CompletionResponse
+import sys, os
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../")))
+from tools.config import AVAILABLES_TOOLS
+from tools.tools import SearchMaterialsTool, GetMaterialPropertiesTool
 import requests
 import hashlib
 import logging
@@ -12,7 +17,11 @@ class CompletionService:
     def __init__(self):
         self.intention_api = "http://agents:8003/v1/intention"
         self.chat_api = "http://backend-llm:8001/v1/chat"
-        self.tools = {}
+        self.tools = {
+            "search_materials": SearchMaterialsTool(),
+            "get_material_properties": GetMaterialPropertiesTool(),
+            "delegate_to_reasoner": None,
+        }
 
     def chat(self, request: CompletionRequest) -> CompletionResponse:
         # Implement the logic to call the chat API and return the response
@@ -28,22 +37,24 @@ class CompletionService:
                 json=payload,
                 headers={"Content-Type": "application/json"},
             )
+            logger.info(f"Intention API response: {steps}")
+            steps = steps.json()
         except Exception as e:
             raise RuntimeError(f"Intention API error: {str(e)}")
 
-        logger.info(f"Intention steps: {steps.json()}")
-        #   Step 2.Execute the plan and generate context
-        context = "No context available."
-        """
-        for step in steps:
+        context = ""
+        for step in steps["steps"]:
+            logger.info(f"Executing step: {step}")
             tool_name = step["tool"]
             arguments = step["arguments"]
             if tool_name not in self.tools.keys():
                 raise RuntimeError(f"Tool {tool_name} not found")
+            if tool_name == "delegate_to_reasoner":
+                break
             tool = self.tools[tool_name]
             tool_response = tool.execute(**arguments)
             context += f"\nTool: {tool_name}\nResponse: {tool_response}\n"
-        """
+            logger.info(f"Generated context: {context}")
 
         # Step 3. Generate final response using chat API
         try:
@@ -80,10 +91,15 @@ class CompletionService:
             "completion_tokens": response_tokens,
             "total_tokens": input_tokens + context_tokens + response_tokens,
         }
+
         return CompletionResponse(
             id=hashlib.md5(request.prompt.encode()).hexdigest(),
             object="text_completion",
-            choices=[{"text": response_text}],
+            choices=[
+                {
+                    "text": response_text,
+                }
+            ],
             usage=usage,
         )
 
