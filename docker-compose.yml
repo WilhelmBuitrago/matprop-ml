@@ -7,6 +7,10 @@ services:
       dockerfile: Dockerfile
     container_name: agent-core
     env_file: ./agent_core/.env
+    environment:
+      NVIDIA_API_KEY: "${NVIDIA_API_KEY}"
+      NVIDIA_BASE_URL: "${NVIDIA_BASE_URL}"
+      LLAMA_CPP_HOST: "${LLAMA_CPP_HOST}"
     ports:
       - "${AGENT_CORE_PORT}:8004"
     restart: unless-stopped
@@ -23,6 +27,10 @@ services:
         dockerfile: Dockerfile
       container_name: agents
       env_file: .env
+      environment:
+        NVIDIA_API_KEY: "${NVIDIA_API_KEY}"
+        NVIDIA_BASE_URL: "${NVIDIA_BASE_URL}"
+        LLAMA_CPP_HOST: "${LLAMA_CPP_HOST}"
       ports:
         - "${AGENTS_PORT}:8003"
       restart: unless-stopped
@@ -83,10 +91,42 @@ services:
     networks:
       - matprop_net
 
+  backend_config:
+    build:
+      context: ./services/backend_config
+      dockerfile: Dockerfile
+    container_name: backend_config
+    ports:
+      - "8005:8005"
+    volumes:
+      - config_data:/app/config_store
+    restart: unless-stopped
+    networks:
+      - matprop_net
+  evaluation-service:
+    build:
+      context: ./services/evaluation_service
+      dockerfile: Dockerfile
+    container_name: evaluation-service
+    ports:
+      - "${EVAL_SERVICE_PORT:-8010}:8010"
+    environment:
+      EVAL_SERVICE_PORT: 8010
+    volumes:
+      - ./services/evaluation_service/storage/runs:/app/storage/runs
+    depends_on:
+      - agent-core
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8010/v1/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - matprop_net
 networks:
   matprop_net:
     driver: bridge
 
-
 volumes:
   ollama_data:
+  config_data:

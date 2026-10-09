@@ -18,9 +18,12 @@ class CrossrefProvider(DocumentProvider):
         self.mailto = mailto
 
     def search(self, query: str, limit: int) -> list[RawDocument]:
-        encoded_query = quote_plus(query)
+        if not query or len(query.strip()) < 3:
+            return []
+        limit = max(1, min(int(limit), 100))
+        encoded_query = quote_plus(query[:500])
         url = f"https://api.crossref.org/works?query={encoded_query}&rows={limit}"
-        if self.mailto:
+        if self.mailto and "@" in self.mailto:
             url = f"{url}&mailto={quote_plus(self.mailto)}"
 
         response = requests.get(url, timeout=self.timeout_seconds)

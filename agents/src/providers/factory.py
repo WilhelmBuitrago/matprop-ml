@@ -1,11 +1,12 @@
 """Provider factory for resolving and caching LLM providers."""
 import logging
-import os
+from services.backend_config.client import client as config
 from typing import Dict, List, Optional, Tuple
 
 from .base import LLMProvider
 from .ollama import OllamaProvider
 from .openrouter import OpenRouterProvider
+from .nvidia import NVIDIAProvider
 from .fallback import FallbackInferenceManager
 from .fallback_manager import FallbackManager
 
@@ -16,11 +17,22 @@ _provider_cache: Dict[str, LLMProvider] = {}
 
 
 def _parse_provider_model(provider_model_str: str) -> tuple[str, str]:
-    """Parse provider:model string into provider and model components."""
+    """Parse provider:model string into provider and model components.
+
+    Normalizes llamat alias to ollama for backward compatibility.
+    """
     if ":" in provider_model_str:
         provider, model = provider_model_str.split(":", 1)
-        return provider.strip(), model.strip()
-    return provider_model_str, ""
+        provider = provider.strip()
+        model = model.strip()
+        # Normalize llamat alias to ollama
+        if provider.lower() == "llamat":
+            provider = "ollama"
+        return provider, model
+    provider = provider_model_str.strip()
+    if provider.lower() == "llamat":
+        provider = "ollama"
+    return provider, ""
 
 
 class ProviderFactory:
@@ -30,65 +42,64 @@ class ProviderFactory:
     def get_provider(provider_model_str: str) -> LLMProvider:
         """
         Get provider instance for provider:model string with caching.
-        
+
         Args:
             provider_model_str: String in format "provider:model" or just "provider"
-            
+
         Returns:
             LLMProvider instance
         """
-        logger.debug("ProviderFactory.get_provider called with provider_model_str=%s", 
+        logger.debug("ProviderFactory.get_provider called with provider_model_str=%s",
                    provider_model_str)
-        
+
         # Check cache first
         if provider_model_str in _provider_cache:
             logger.debug("Returning cached provider for %s", provider_model_str)
             return _provider_cache[provider_model_str]
-        
+
         # Parse provider and model
         provider_name, _ = _parse_provider_model(provider_model_str)
-        
+
         # Create provider instance based on provider name
         provider: Optional[LLMProvider] = None
-        
+
         if provider_name == "ollama":
-            keep_alive = os.getenv("AGENTS_OLLAMA_KEEP_ALIVE", "0s")
+            keep_alive = config.get("system.extra_config.agents_ollama_keep_alive", "0s")
             provider = OllamaProvider(keep_alive=keep_alive)
             logger.debug("Created OllamaProvider instance")
         elif provider_name == "openrouter":
             provider = OpenRouterProvider()
             logger.debug("Created OpenRouterProvider instance")
+        elif provider_name == "nvidia":
+            provider = NVIDIAProvider()
+            logger.debug("Created NVIDIAProvider instance")
         else:
-            # Default to Ollama if not specified
-            keep_alive = os.getenv("AGENTS_OLLAMA_KEEP_ALIVE", "0s")
-            provider = OllamaProvider(keep_alive=keep_alive)
-            logger.debug("Created default OllamaProvider instance for unknown provider: %s", 
-                       provider_name)
-        
+            raise ValueError(f"Unknown provider: {provider_name}. No fallback to Ollama.")
+
         # Cache the provider
         if provider:
             _provider_cache[provider_model_str] = provider
-            
+
         return provider
 
     @staticmethod
     def get_provider_with_fallback(primary_provider_str: str, fallback_provider_strs: List[str] = None) -> LLMProvider:
         """
         Get provider with fallback chain for failover support.
-        
+
         Args:
             primary_provider_str: Primary provider:model string
             fallback_provider_strs: List of fallback provider:model strings
-            
+
         Returns:
             LLMProvider with fallback support
         """
         logger.debug("ProviderFactory.get_provider_with_fallback called with primary=%s, fallbacks=%s",
                    primary_provider_str, fallback_provider_strs)
-        
+
         # Get primary provider
         primary_provider = ProviderFactory.get_provider(primary_provider_str)
-        
+
         # Get fallback providers
         fallback_providers = []
         if fallback_provider_strs:
@@ -98,13 +109,13 @@ class ProviderFactory:
                     fallback_providers.append(fallback_provider)
                 except Exception as e:
                     logger.warning("Failed to create fallback provider %s: %s", fallback_str, e)
-        
+
         # Create fallback manager
         fallback_inference_manager = FallbackInferenceManager(
             primary_provider=primary_provider,
             fallback_providers=fallback_providers
         )
-        
+
         # Wrap in FallbackManager to make it implement LLMProvider interface
         return FallbackManager(fallback_inference_manager)
 

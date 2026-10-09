@@ -62,20 +62,6 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
             state.budget.iterations_used,
             state.budget.tool_calls_used,
         )
-        if state.budget.iterations_used >= state.budget.max_iterations:
-            state.set_stop_reason("max_iterations")
-            logger.warning(
-                "loop_stop request_id=%s reason=%s",
-                state.request_id,
-                state.stop_reason_canonical,
-            )
-            await emitter.emit(
-                "stop",
-                {"reason": state.stop_reason},
-                trace="Iteration budget exhausted",
-            )
-            break
-
         if state.budget.tool_calls_used >= state.budget.max_tool_calls:
             state.set_stop_reason("max_tool_calls")
             logger.warning(
@@ -438,7 +424,7 @@ async def run_loop(state, registry, planner, evaluator, emitter, tool_catalog):
         state.refresh_runtime_counts()
 
     if state.stop_reason is None:
-        state.set_stop_reason("max_iterations")
+        state.set_stop_reason("completed")
 
     if state.plan.status == "active" and state.stop_reason in {
         "plan_exhausted",

@@ -18,8 +18,11 @@ class SemanticScholarProvider(DocumentProvider):
         self.api_key = api_key
 
     def search(self, query: str, limit: int) -> list[RawDocument]:
+        if not query or len(query.strip()) < 3:
+            return []
+        limit = max(1, min(int(limit), 100))
         fields = "paperId,title,abstract,year,authors,doi,url,citationCount"
-        encoded_query = quote_plus(query)
+        encoded_query = quote_plus(query[:500])
         url = (
             "https://api.semanticscholar.org/graph/v1/paper/search"
             f"?query={encoded_query}&limit={limit}&fields={fields}"

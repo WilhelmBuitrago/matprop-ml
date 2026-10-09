@@ -5,7 +5,6 @@ from typing import Final
 # Canonical stop reasons for deterministic runtime control.
 STOP_REASONS: Final[list[str]] = [
     "completed",
-    "max_iterations",
     "max_tool_calls",
     "evaluator_failed",
     "tool_validation_failed",
@@ -22,7 +21,6 @@ STOP_REASONS: Final[list[str]] = [
 
 LEGACY_STOP_REASON_BY_CANONICAL: Final[dict[str, str]] = {
     "completed": "sufficient_evidence",
-    "max_iterations": "budget_exhausted",
     "max_tool_calls": "budget_exhausted",
     "evaluator_failed": "evaluator_failed",
     "tool_validation_failed": "tool_execution_failed",

@@ -7,3 +7,4 @@ mp_api==0.45.15
 numpy<2.0.0
 PyMuPDF==1.24.0
 aiofiles==24.1.0
+openai>=1.0

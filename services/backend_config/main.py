@@ -9,17 +9,12 @@ import json
 from typing import Dict, Any, Optional
 from pydantic import ValidationError
 from pydantic import BaseModel
-import sys
-import os
 from datetime import datetime
 
-# Add the parent directory to the path for imports
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
-# Import using absolute paths
-from config_schema import ConfigSchema, ModelConfig, APIConfig, SystemConfig, ModelProvider
-from config_persistence import ConfigPersistence
-from audit_log import AuditLogger
+# Import using relative paths
+from .config_schema import ConfigSchema, ModelConfig, APIConfig, SystemConfig, ModelProvider
+from .config_persistence import ConfigPersistence
+from .audit_log import AuditLogger
 
 # Global configuration instance
 current_config: ConfigSchema = None

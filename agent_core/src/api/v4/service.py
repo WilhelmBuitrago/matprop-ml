@@ -270,17 +270,15 @@ class PlannedRuntimeV4Service:
     def chat(self, request: CompletionRequestV4) -> CompletionResponseV4:
         request_id = self._generate_request_id(request.query)
         logger.info(
-            "chat_v4_start request_id=%s query_len=%d max_iterations=%d max_tool_calls=%d",
+            "chat_v4_start request_id=%s query_len=%d max_tool_calls=%d",
             request_id,
             len(request.query),
-            request.max_iterations,
             request.max_tool_calls,
         )
         state, emitter, planner_outcome = self.runtime.execute(
             request_id=request_id,
             query=request.query,
             budget=BudgetState(
-                max_iterations=request.max_iterations,
                 max_tool_calls=request.max_tool_calls,
                 max_wall_time_ms=request.max_wall_time_ms,
             ),

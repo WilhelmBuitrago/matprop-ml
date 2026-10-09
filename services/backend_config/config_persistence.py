@@ -6,13 +6,9 @@ from pathlib import Path
 from typing import Optional
 import logging
 import sys
-import os
 
-# Add the parent directory to the path for imports
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
-# Import using absolute paths
-from config_schema import ConfigSchema
+# Import using relative paths
+from .config_schema import ConfigSchema
 
 logger = logging.getLogger(__name__)
 

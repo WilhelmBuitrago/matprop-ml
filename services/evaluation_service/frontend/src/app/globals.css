@@ -1,0 +1,156 @@
+:root {
+  --bg: #f9f4eb;
+  --paper: #fffaf2;
+  --ink: #211a14;
+  --muted: #6f655c;
+  --accent: #0d7f78;
+  --accent-2: #d98532;
+  --danger: #b44431;
+  --line: #ddcfbd;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
+  color: var(--ink);
+  background: radial-gradient(circle at 10% -10%, #fffef9 0%, #f6efe2 40%, #ebdfcd 100%);
+}
+
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+h1,
+h2 {
+  margin-top: 0;
+}
+
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--paper);
+  box-shadow: 0 12px 28px rgba(33, 26, 20, 0.08);
+  padding: 16px;
+  margin-bottom: 16px;
+  animation: rise 260ms ease-out;
+}
+
+@keyframes rise {
+  from {
+    transform: translateY(6px);
+    opacity: 0.4;
+  }
+  to {
+    transform: translateY(0px);
+    opacity: 1;
+  }
+}
+
+textarea,
+input,
+select,
+button {
+  font-family: inherit;
+}
+
+textarea,
+input,
+select {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  padding: 10px;
+  background: #fffdfa;
+}
+
+label {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 10px;
+  margin-bottom: 4px;
+}
+
+fieldset {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  background: #fffdf8;
+}
+
+legend {
+  padding: 0 6px;
+  color: var(--ink);
+  font-weight: bold;
+}
+
+button {
+  border: 0;
+  border-radius: 10px;
+  background: linear-gradient(120deg, var(--accent), var(--accent-2));
+  color: white;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.error {
+  color: var(--danger);
+}
+
+.badge {
+  display: inline-block;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 10px;
+  margin-right: 8px;
+  font-size: 12px;
+}
+
+.config-errors {
+  margin-top: 12px;
+  border: 1px solid #e7b0a8;
+  background: #fff6f4;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.config-errors h3 {
+  margin: 0 0 8px;
+  color: var(--danger);
+  font-size: 15px;
+}
+
+.config-errors ul {
+  margin: 0;
+  padding-left: 18px;
+}

@@ -52,19 +52,15 @@ class DocumentRAGTool(ToolContract):
 
         self.embeddings_client: AgentsEmbeddingsClient | None = None
         try:
-            # Try to get agents URL from centralized configuration first
+            # Try to get agents URL from backend_config service
             agents_url = None
             try:
-                from common.config_client import client as config
-                agents_url = config.get("api.host", "http://agents:8003")
+                from backend_config.service import get_config
+                cfg = get_config()
+                agents_url = cfg.get("api", {}).get("host", "http://agents:8003")
             except Exception:
-                # Fallback for import issues during transition
-                try:
-                    from common.config import config
-                    agents_url = config.get("api.host", "http://agents:8003")
-                except Exception:
-                    pass  # Fall back to environment variables if config not available
-            
+                pass
+
             if not agents_url:
                 agents_url = os.getenv(
                     "AGENTS_SERVICE_URL",
@@ -115,6 +111,11 @@ class DocumentRAGTool(ToolContract):
         top_k = int(kwargs.get("top_k", 10))
         max_documents = int(kwargs.get("max_documents", 5))
         max_chunks_per_document = int(kwargs.get("max_chunks_per_document", 20))
+
+        top_k = max(1, min(top_k, 50))
+        max_documents = max(1, min(max_documents, 20))
+        max_chunks_per_document = max(1, min(max_chunks_per_document, 100))
+        query = query[:2000]
 
         selected_documents = sorted(
             documents,

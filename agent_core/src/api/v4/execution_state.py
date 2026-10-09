@@ -10,7 +10,6 @@ class ExecutionState:
         iterations_used: int = 0,
         tool_calls_used: int = 0,
         replans_used: int = 0,
-        max_iterations: int = 8,
         max_tool_calls: int = 8,
         max_wall_time_ms: int | None = None,
         started_at_ms: int | None = None,
@@ -18,7 +17,6 @@ class ExecutionState:
         self.iterations_used = int(iterations_used)
         self.tool_calls_used = int(tool_calls_used)
         self.replans_used = int(replans_used)
-        self.max_iterations = int(max_iterations)
         self.max_tool_calls = int(max_tool_calls)
         self.max_wall_time_ms = max_wall_time_ms
         self.started_at_ms = started_at_ms
@@ -36,7 +34,6 @@ class ExecutionState:
             "iterations_used": self.iterations_used,
             "tool_calls_used": self.tool_calls_used,
             "replans_used": self.replans_used,
-            "max_iterations": self.max_iterations,
             "max_tool_calls": self.max_tool_calls,
             "max_wall_time_ms": self.max_wall_time_ms,
             "started_at_ms": self.started_at_ms,
@@ -44,4 +41,6 @@ class ExecutionState:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]):
+        data = dict(data)
+        data.pop("max_iterations", None)
         return cls(**data)

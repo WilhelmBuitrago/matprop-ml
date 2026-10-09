@@ -16,7 +16,10 @@ class ArxivProvider(DocumentProvider):
         self.timeout_seconds = timeout_seconds
 
     def search(self, query: str, limit: int) -> list[RawDocument]:
-        encoded_query = quote_plus(query)
+        if not query or len(query.strip()) < 3:
+            return []
+        limit = max(1, min(int(limit), 50))
+        encoded_query = quote_plus(query[:500])
         url = (
             "http://export.arxiv.org/api/query?search_query=all:"
             f"{encoded_query}&start=0&max_results={limit}"

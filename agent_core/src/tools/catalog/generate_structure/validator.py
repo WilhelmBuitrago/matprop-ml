@@ -35,6 +35,9 @@ class PyMatgenValidator:
         warnings: list[str] = []
         structure = parsed.structure
 
+        if len(structure) > 500:
+            return ValidationResult(is_valid=False, errors=["structure_too_large"], warnings=[])
+
         if structure.lattice.volume <= 0:
             errors.append("invalid_lattice_volume")
 

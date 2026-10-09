@@ -5,18 +5,58 @@ from __future__ import annotations
 from typing import Dict, Optional, List, Union
 import logging
 
-# Use the new REST-based client
+# Use the new REST-based client from centralized config service
 try:
-    from common.config_client import client as config
+    from services.backend_config.client import client as config
 except ImportError:
-    # Fallback for import issues during transition
-    from common.config import config
+    # Fallback if config service is not available
+    import json
+    import os
+    from pathlib import Path
+
+    class FallbackConfig:
+        """Fallback config client for when centralized service is unavailable"""
+        def get(self, key, default=None):
+            # Try to read from config.json - multiple possible locations
+            possible_paths = [
+                Path("../services/backend_config/config_store/config.json"),  # Relative from agents/src/models
+                Path("../../services/backend_config/config_store/config.json"),  # Relative from agents/src
+                Path("./config_store/config.json"),  # Local config store
+                Path("/app/config_store/config.json")  # Docker volume path
+            ]
+
+            config_path = None
+            for path in possible_paths:
+                if path.exists():
+                    config_path = path
+                    break
+
+            if config_path and config_path.exists():
+                try:
+                    with open(config_path) as f:
+                        data = json.load(f)
+                        # Simple dot notation traversal
+                        keys = key.split('.')
+                        value = data
+                        for k in keys:
+                            if k in value:
+                                value = value[k]
+                            else:
+                                return default
+                        return value
+                except Exception:
+                    pass
+
+            # Fallback to environment variable
+            return os.getenv(key, default)
+
+    config = FallbackConfig()
 
 logger = logging.getLogger(__name__)
 
 class ModelConfig:
     """Configuration for a specific model."""
-    
+
     def __init__(self, provider: str, model_name: str, temperature: float = 0.7, max_tokens: int = 1000,
                  top_p: float = 1.0, frequency_penalty: float = 0.0, presence_penalty: float = 0.0):
         self.provider = provider
@@ -26,76 +66,76 @@ class ModelConfig:
         self.top_p = top_p
         self.frequency_penalty = frequency_penalty
         self.presence_penalty = presence_penalty
-    
+
     def to_provider_model_string(self) -> str:
         """Convert to provider:model string format."""
         return f"{self.provider}:{self.model_name}"
 
-def _get_model_config(model_key: str, default_provider: str = "ollama", 
+def _get_model_config(model_key: str, default_provider: str = "ollama",
                       default_model: str = "deepseek-r1:8b") -> ModelConfig:
     """
     Get model configuration from centralized config.
-    
+
     Args:
         model_key: Key to look up in the config (e.g., "planner", "evaluator")
         default_provider: Default provider if not found in config
         default_model: Default model name if not found in config
-        
+
     Returns:
         ModelConfig with provider and model information
     """
     # Try to get the model configuration from centralized config
     provider = config.get(f"models.{model_key}.provider")
     model_name = config.get(f"models.{model_key}.model_name")
-    
+
     if provider is None or model_name is None:
         # Try to get default model configuration
         default_provider_config = config.get(f"models.default.provider")
         default_model_config = config.get(f"models.default.model_name")
-        
+
         if default_provider_config:
             default_provider = default_provider_config
-            
+
         if default_model_config:
             default_model = default_model_config
-            
+
         # If still no config, log critical warning and use safe defaults
         if provider is None and model_key != "default":
             logger.critical(f"Model '{model_key}' not found in config. Using default provider: {default_provider}")
             provider = default_provider
-            
+
         if model_name is None and model_key != "default":
             logger.critical(f"Model name for '{model_key}' not found in config. Using default model: {default_model}")
             model_name = default_model
-            
+
         # If this is the default model itself and it's missing, use hardcoded safe defaults
         if model_key == "default":
             provider = provider or default_provider
             model_name = model_name or default_model
-    
+
     # Get additional model parameters from centralized config
     temperature = config.get(f"models.{model_key}.temperature", 0.7)
     max_tokens = config.get(f"models.{model_key}.max_tokens", 1000)
     top_p = config.get(f"models.{model_key}.top_p", 1.0)
     frequency_penalty = config.get(f"models.{model_key}.frequency_penalty", 0.0)
     presence_penalty = config.get(f"models.{model_key}.presence_penalty", 0.0)
-    
-    return ModelConfig(provider or default_provider, model_name or default_model, 
+
+    return ModelConfig(provider or default_provider, model_name or default_model,
                        temperature, max_tokens, top_p, frequency_penalty, presence_penalty)
 
 
 def get_fallback_chain(role: str) -> List[str]:
     """
     Get the fallback chain for a specific role from centralized configuration.
-    
+
     Args:
         role: The agent role (e.g., 'evaluator', 'planner', 'final')
-        
+
     Returns:
         List of provider:model strings in order of preference
     """
     fallback_chain = []
-    
+
     # Check for role-specific fallback chain in config
     fallback_value = config.get(f"models.{role}.fallback_chain")
     if fallback_value:
@@ -103,12 +143,12 @@ def get_fallback_chain(role: str) -> List[str]:
             fallback_chain = [model.strip() for model in fallback_value.split(",")]
         elif isinstance(fallback_value, list):
             fallback_chain = fallback_value
-    
+
     # If no fallback chain specified, use default chain from config
     if not fallback_chain:
         default_chain = config.get("models.default_fallback_chain", ["ollama", "openrouter"])
         fallback_chain = default_chain if isinstance(default_chain, list) else ["ollama", "openrouter"]
-    
+
     return fallback_chain
 
 
@@ -168,6 +208,8 @@ ALL_MODEL_CONFIGS = {
 }
 
 # Pulled automatically at startup.
+# Note: LoadModelsService now filters to Ollama whitelist at runtime
+# to avoid circular imports. ALL_MODELS remains the full set.
 ALL_MODELS = sorted(
     {
         EMBEDDING_MODEL,

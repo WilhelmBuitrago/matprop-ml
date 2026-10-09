@@ -281,50 +281,19 @@ class PlanningEvaluatorService:
         return result
 
 
-class DomainCriticService:
-    """Domain critic wrapper around dedicated model and endpoint."""
-
-    def __init__(self, model_name: str, ollama_client: OllamaClient) -> None:
-        """
-        Initialize domain critic service.
-        
-        Args:
-            model_name: Name of the domain critic model
-            ollama_client: Ollama client instance
-        """
-        self._model = DomainCriticModel(
-            model_name=model_name, ollama_client=ollama_client
-        )
-        logger.debug("[DomainCriticService] Initialized with model=%s", model_name)
-
-    def call(self, payload: DomainCriticRequest) -> DomainCriticResponse:
-        """
-        Execute domain critic.
-        
-        Args:
-            payload: Domain critic request
-            
-        Returns:
-            Domain critic response
-        """
-        logger.info("[DomainCriticService] Executing domain critic")
-        result = self._model.call(payload)
-        logger.info("[DomainCriticService] Critic completed")
-        return result
-
-
 class InsightsService:
     """Insights service wrapper around the insights model."""
 
-    def __init__(self, model_name: str, ollama_client: OllamaClient) -> None:
+    def __init__(self, model_name: str, llm_provider = None, ollama_client: OllamaClient = None) -> None:
         """
         Initialize insights service.
         
         Args:
             model_name: Name of the insights model
-            ollama_client: Ollama client instance
+            llm_provider: LLMProvider instance
+            ollama_client: Ollama client instance (for backward compatibility)
         """
-        self._model = InsightsModel(model_name=model_name, ollama_client=ollama_client)
+        self._model = InsightsModel(model_name=model_name, llm_provider=llm_provider, ollama_client=ollama_client)
         logger.debug("[InsightsService] Initialized with model=%s", model_name)
 
     def extract_insights(
@@ -371,44 +340,6 @@ class InsightsService:
 
     def call(self, payload: PlanningEvaluatorRequest) -> PlanningEvaluatorOutput:
         return self._model.call(payload)
-
-
-class DomainCriticService:
-    """Domain critic wrapper around dedicated model and endpoint."""
-
-    def __init__(self, model_name: str, llm_provider = None, ollama_client: OllamaClient = None) -> None:
-        """
-        Initialize domain critic service.
-        
-        Args:
-            model_name: Name of the domain critic model
-            llm_provider: LLMProvider instance
-            ollama_client: Ollama client instance (for backward compatibility)
-        """
-        self._model = DomainCriticModel(
-            model_name=model_name,
-            llm_provider=llm_provider,
-            ollama_client=ollama_client,
-        )
-        logger.debug("[DomainCriticService] Initialized with model=%s", model_name)
-
-    def call(self, payload: DomainCriticRequest) -> DomainCriticResponse:
-        """
-        Execute domain critic.
-        
-        Args:
-            payload: Domain critic request
-            
-        Returns:
-            Domain critic response
-        """
-        logger.info("[DomainCriticService] Executing domain critic")
-        result = self._model.call(payload)
-        logger.info("[DomainCriticService] Critic completed")
-        return result
-
-
-class InsightsService:
     """Insights service wrapper around the insights model."""
 
     def __init__(

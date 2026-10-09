@@ -2,6 +2,7 @@
 from .base import LLMProvider
 from .ollama import OllamaProvider
 from .openrouter import OpenRouterProvider
+from .nvidia import NVIDIAProvider
 from .factory import ProviderFactory
 from .exceptions import (
     LLMProviderError,
@@ -18,6 +19,7 @@ __all__ = [
     "LLMProvider",
     "OllamaProvider",
     "OpenRouterProvider",
+    "NVIDIAProvider",
     "ProviderFactory",
     "LLMProviderError",
     "ProviderTimeoutError",

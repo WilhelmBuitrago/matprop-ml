@@ -13,7 +13,6 @@ class CompletionRequestV4(BaseModel):
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     max_tokens_for_response: int = Field(default=512, ge=32, le=4096)
 
-    max_iterations: int = Field(default=8, ge=1, le=32)
     max_tool_calls: int = Field(default=8, ge=1, le=32)
     max_context_tokens: int = Field(default=2048, ge=256, le=8192)
     max_wall_time_ms: int | None = Field(default=None, ge=1000, le=120000)

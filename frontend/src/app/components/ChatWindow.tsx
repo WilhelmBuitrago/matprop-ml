@@ -12,7 +12,7 @@ const resolveChatEndpoint = () => {
   while (trimmedBase.endsWith("/")) {
     trimmedBase = trimmedBase.slice(0, -1);
   }
-  return trimmedBase ? `${trimmedBase}/v1/completions` : "/v1/completions";
+  return trimmedBase ? `${trimmedBase}/v4/completions` : "/v4/completions";
 };
 
 interface Message {
@@ -33,18 +33,34 @@ export default function ChatWindow() {
   const hasUserMessage = messages.some(message => message.sender === "user");
 
   const sendMessage = async (text: string) => {
-    const userMessage: Message = { text, sender: "user" };
+    const trimmed = text.trim();
+    if (!trimmed || trimmed.length > 10000) {
+      setMessages(prev => [...prev, { text: "Mensaje vacío o demasiado largo.", sender: "system" }]);
+      return;
+    }
+    const userMessage: Message = { text: trimmed, sender: "user" };
     const updatedHistory = [...messages, userMessage];
     setMessages(updatedHistory);
     setLoading(true);
 
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 120000);
       const endpoint = resolveChatEndpoint();
       const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: text }),
+        body: JSON.stringify({
+          query: trimmed,
+          stream: false,
+          temperature: 0.2,
+          max_tokens_for_response: 512,
+          max_tool_calls: 8,
+          max_context_tokens: 2048,
+        }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -55,7 +71,7 @@ export default function ChatWindow() {
         throw new Error("Invalid completion response");
       }
 
-      const responseText: string = data.choices[0].text;
+      const responseText: string = data.choices[0]?.text ?? data.choices[0]?.message?.content ?? "";
 
       if (!responseText) {
         setMessages(prev => [

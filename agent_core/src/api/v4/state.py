@@ -23,7 +23,6 @@ class MaterialHypothesis:
 
 @dataclass
 class BudgetState:
-    max_iterations: int = 8
     max_tool_calls: int = 8
     max_wall_time_ms: int | None = None
 
@@ -73,7 +72,6 @@ class AgentState:
                 iterations_used=self.budget.iterations_used,
                 tool_calls_used=self.budget.tool_calls_used,
                 replans_used=self.replans_used,
-                max_iterations=self.budget.max_iterations,
                 max_tool_calls=self.budget.max_tool_calls,
                 max_wall_time_ms=self.budget.max_wall_time_ms,
                 started_at_ms=self.budget.started_at_ms,
@@ -93,7 +91,6 @@ class AgentState:
         self.execution_state.iterations_used = self.budget.iterations_used
         self.execution_state.tool_calls_used = self.budget.tool_calls_used
         self.execution_state.replans_used = self.replans_used
-        self.execution_state.max_iterations = self.budget.max_iterations
         self.execution_state.max_tool_calls = self.budget.max_tool_calls
         self.execution_state.max_wall_time_ms = self.budget.max_wall_time_ms
         self.execution_state.started_at_ms = self.budget.started_at_ms

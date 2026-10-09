@@ -1,7 +1,7 @@
 """OpenRouter provider implementation."""
 import json
 import logging
-import os
+from services.backend_config.client import client as config
 import time
 from typing import Any, Dict, List, Optional, Set
 
@@ -18,15 +18,10 @@ class OpenRouterProvider(LLMProvider):
     def __init__(self):
         """Initialize OpenRouter provider."""
         # Try to get API key from centralized configuration first
-        try:
-            from common.config_client import client as config
+        self.api_key = config.get("external_apis.openrouter_api_key")
+        if not self.api_key:
+            # Fallback to environment variable for backward compatibility
             self.api_key = config.get("external_apis.openrouter_api_key")
-            if not self.api_key:
-                # Fallback to environment variable for backward compatibility
-                self.api_key = os.getenv("OPENROUTER_API_KEY")
-        except Exception:
-            # Fallback to environment variable if config not available
-            self.api_key = os.getenv("OPENROUTER_API_KEY")
             
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY is required in configuration or environment variables")

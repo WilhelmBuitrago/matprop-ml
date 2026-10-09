@@ -63,14 +63,15 @@ class MaterialsProjectClient:
         return MPRester
 
     def _read_api_key(self) -> str:
-        # Try to get API key from centralized configuration first
+        # Try to get API key from backend_config service
         try:
-            from common.config import config
-            api_key = config.get("external_apis.mp_api_key")
+            from backend_config.service import get_config
+            cfg = get_config()
+            api_key = cfg.get("external_apis", {}).get("mp_api_key")
             if api_key:
                 return api_key
         except Exception:
-            pass  # Fall back to environment variables if config not available
+            pass
         
         # Fallback to environment variables for backward compatibility
         api_key = os.getenv("MP_API_KEY")

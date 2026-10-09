@@ -26,7 +26,7 @@ def test_config_change_reflection():
     print(f"Current embedding model in config: {config_data['models']['embedding']['model_name']}")
     
     # Test that the registry reflects the current config
-    from common.config import config
+    from services.backend_config.client import client as config
     current_embedding_model = config.get("models.embedding.model_name")
     print(f"Registry reports embedding model as: {current_embedding_model}")
     

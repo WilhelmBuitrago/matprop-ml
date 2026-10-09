@@ -1,8 +1,9 @@
 import logging
-import os
+from services.backend_config.client import client as config
 import shutil
 import subprocess
 import time
+import os
 from contextlib import asynccontextmanager
 from typing import Any, List, Dict
 
@@ -71,7 +72,7 @@ class ConfigUpdateRequest(BaseModel):
 def _prefer_gpu_enabled() -> bool:
     """
     Check if GPU preference is enabled via environment variable.
-    
+
     Returns:
         bool: True if GPU is preferred, False otherwise
     """
@@ -84,7 +85,7 @@ def _prefer_gpu_enabled() -> bool:
 def _detect_gpu_available() -> bool:
     """
     Detect if GPU is available for Ollama runtime.
-    
+
     Returns:
         bool: True if GPU is detected, False otherwise
     """
@@ -117,7 +118,7 @@ def _detect_gpu_available() -> bool:
 async def lifespan(app: FastAPI):
     """
     Application lifespan manager for Ollama services.
-    
+
     Args:
         app: FastAPI application instance
     """
@@ -126,7 +127,7 @@ async def lifespan(app: FastAPI):
 
     start_time = time.time()
     logger.info("[LIFESPAN] Starting runtime services initialization")
-    
+
     keep_alive = resolve_keep_alive()
     gpu_requested = _prefer_gpu_enabled()
     gpu_detected = _detect_gpu_available()
@@ -144,11 +145,11 @@ async def lifespan(app: FastAPI):
     runtime_services = V2RuntimeServices(keep_alive=keep_alive)
     logger.info("[LIFESPAN] Downloading required models...")
     runtime_services.download_models()
-    
+
     init_duration = time.time() - start_time
     logger.info("[LIFESPAN] Initialization completed in %.2f seconds", init_duration)
     yield
-    
+
     logger.info("[LIFESPAN] Shutdown completed")
 
 
@@ -156,18 +157,18 @@ async def lifespan(app: FastAPI):
 def decision(request: Request, payload: DecisionModelInput) -> DecisionModelOutput:
     """
     Execute decision model to select next action for materials-agent loop.
-    
+
     Args:
         request: FastAPI request object
         payload: Decision model input containing query, intent, state, and available tools
-    
+
     Returns:
         Decision model output with selected action and confidence
     """
     if runtime_services is None:
         logger.error("[DECISION] Runtime services unavailable")
         raise HTTPException(status_code=503, detail="runtime_services_unavailable")
-    
+
     request_start = time.time()
     logger.info(
         "[DECISION] Request received | client=%s | query_len=%d | tools_count=%d",
@@ -175,7 +176,7 @@ def decision(request: Request, payload: DecisionModelInput) -> DecisionModelOutp
         len(payload.query),
         len(payload.tools_available),
     )
-    
+
     try:
         result = runtime_services.decision.call(payload)
         duration = time.time() - request_start
@@ -202,18 +203,18 @@ def decision(request: Request, payload: DecisionModelInput) -> DecisionModelOutp
 def planning_evaluator(request: Request, payload: PlanningEvaluatorRequest) -> PlanningEvaluatorOutput:
     """
     Execute planning or evaluation for materials-agent pipeline.
-    
+
     Args:
         request: FastAPI request object
         payload: Planning/evaluation request containing mode and context
-    
+
     Returns:
         Planning/evaluation output with steps or feedback
     """
     if runtime_services is None:
         logger.error("[PLANNING-EVALUATOR] Runtime services unavailable")
         raise HTTPException(status_code=503, detail="runtime_services_unavailable")
-    
+
     request_start = time.time()
     logger.info(
         "[PLANNING-EVALUATOR] Request received | client=%s | mode=%s | query_len=%d",
@@ -221,7 +222,7 @@ def planning_evaluator(request: Request, payload: PlanningEvaluatorRequest) -> P
         payload.mode,
         len(payload.query),
     )
-    
+
     try:
         result = runtime_services.planning_evaluator.call(payload)
         duration = time.time() - request_start
@@ -248,18 +249,18 @@ def planning_evaluator(request: Request, payload: PlanningEvaluatorRequest) -> P
 def domain_critic(request: Request, payload: DomainCriticRequest) -> DomainCriticResponse:
     """
     Execute domain critic evaluation for response validation.
-    
+
     Args:
         request: FastAPI request object
         payload: Domain critic request containing user query and draft response
-    
+
     Returns:
         Domain critic response with validation feedback
     """
     if runtime_services is None:
         logger.error("[DOMAIN-CRITIC] Runtime services unavailable")
         raise HTTPException(status_code=503, detail="runtime_services_unavailable")
-    
+
     request_start = time.time()
     logger.info(
         "[DOMAIN-CRITIC] Request received | client=%s | query_len=%d | reasoning_steps=%d",
@@ -267,7 +268,7 @@ def domain_critic(request: Request, payload: DomainCriticRequest) -> DomainCriti
         len(payload.user_query),
         len(payload.reasoning_steps),
     )
-    
+
     try:
         result = runtime_services.domain_critic.call(payload)
         duration = time.time() - request_start
@@ -293,18 +294,18 @@ def domain_critic(request: Request, payload: DomainCriticRequest) -> DomainCriti
 def get_completions(request: Request, request_data: CompletionRequest) -> str:
     """
     Generate chat completions using the chat service.
-    
+
     Args:
         request: FastAPI request object
         request_data: Completion request containing conversation history
-    
+
     Returns:
         Generated completion text
     """
     if runtime_services is None:
         logger.error("[COMPLETIONS] Runtime services unavailable")
         raise HTTPException(status_code=503, detail="runtime_services_unavailable")
-    
+
     request_start = time.time()
     logger.info(
         "[COMPLETIONS] Request received | client=%s | history_len=%d | model=%s",
@@ -312,7 +313,7 @@ def get_completions(request: Request, request_data: CompletionRequest) -> str:
         len(request_data.history),
         request_data.model_name or "default",
     )
-    
+
     try:
         result = runtime_services.chat.chat(
             history=request_data.history,
@@ -342,25 +343,25 @@ def get_completions(request: Request, request_data: CompletionRequest) -> str:
 def extract_crystal_spec(request: Request, request_data: CrystalSpecExtractionRequest) -> dict[str, Any]:
     """
     Extract crystal structure specification from query.
-    
+
     Args:
         request: FastAPI request object
         request_data: Crystal spec extraction request
-    
+
     Returns:
         Dict containing extracted specification
     """
     if runtime_services is None:
         logger.error("[CRYSTAL-SPEC] Runtime services unavailable")
         raise HTTPException(status_code=503, detail="runtime_services_unavailable")
-    
+
     request_start = time.time()
     logger.info(
         "[CRYSTAL-SPEC] Request received | client=%s | query_len=%d",
         request.client.host if request.client else "unknown",
         len(request_data.query),
     )
-    
+
     try:
         parsed = runtime_services.crystal_spec.extract(
             query=request_data.query,
@@ -388,25 +389,25 @@ def extract_crystal_spec(request: Request, request_data: CrystalSpecExtractionRe
 def complete_crystal(request: Request, request_data: CrystalCompletionRequest) -> dict[str, str]:
     """
     Generate crystal structure completion from prompt.
-    
+
     Args:
         request: FastAPI request object
         request_data: Crystal completion request
-    
+
     Returns:
         Dict containing generated text
     """
     if runtime_services is None:
         logger.error("[CRYSTAL-COMPLETE] Runtime services unavailable")
         raise HTTPException(status_code=503, detail="runtime_services_unavailable")
-    
+
     request_start = time.time()
     logger.info(
         "[CRYSTAL-COMPLETE] Request received | client=%s | model=%s",
         request.client.host if request.client else "unknown",
         request_data.model_name or "default",
     )
-    
+
     try:
         text = runtime_services.cif.generate_from_prompt(
             system_message=request_data.system_message,
@@ -439,17 +440,17 @@ def complete_crystal(request: Request, request_data: CrystalCompletionRequest) -
 def get_info(request: Request) -> dict[str, Any]:
     """
     Get service information and configuration.
-    
+
     Args:
         request: FastAPI request object
-    
+
     Returns:
         Dict containing service info
     """
     if runtime_services is None:
         logger.error("[INFO] Runtime services unavailable")
         raise HTTPException(status_code=503, detail="runtime_services_unavailable")
-    
+
     logger.info(
         "[INFO] Request received | client=%s",
         request.client.host if request.client else "unknown",
@@ -468,25 +469,25 @@ def health_check() -> dict[str, str]:
 def get_cif(request: Request, request_data: CifRequest) -> dict[str, str]:
     """
     Generate CIF file content for a compound.
-    
+
     Args:
         request: FastAPI request object
         request_data: CIF request containing compound name
-    
+
     Returns:
         Dict containing CIF content
     """
     if runtime_services is None:
         logger.error("[CIF] Runtime services unavailable")
         raise HTTPException(status_code=503, detail="runtime_services_unavailable")
-    
+
     request_start = time.time()
     logger.info(
         "[CIF] Request received | client=%s | compound=%s",
         request.client.host if request.client else "unknown",
         request_data.compound_name,
     )
-    
+
     try:
         cif = runtime_services.cif.get_cif(
             compound_name=request_data.compound_name,
@@ -513,11 +514,11 @@ def get_cif(request: Request, request_data: CifRequest) -> dict[str, str]:
 async def embed_texts(request: Request, request_data: EmbeddingRequest) -> EmbeddingResponse:
     """
     Generate embeddings for multiple texts.
-    
+
     Args:
         request: FastAPI request object
         request_data: Embedding request containing texts to embed
-    
+
     Returns:
         Embedding response with vectors
     """
@@ -527,14 +528,14 @@ async def embed_texts(request: Request, request_data: EmbeddingRequest) -> Embed
     if not request_data.texts:
         logger.warning("[EMBEDDINGS] Empty texts list received from %s", request.client.host if request.client else "unknown")
         raise HTTPException(status_code=400, detail="texts list cannot be empty")
-    
+
     request_start = time.time()
     logger.info(
         "[EMBEDDINGS] Request received | client=%s | text_count=%d",
         request.client.host if request.client else "unknown",
         len(request_data.texts),
     )
-    
+
     try:
         embeddings = runtime_services.embeddings.embed_texts(request_data.texts)
         duration = time.time() - request_start
@@ -562,18 +563,18 @@ async def embed_texts(request: Request, request_data: EmbeddingRequest) -> Embed
 def extract_insights(request: Request, request_data: InsightRequest) -> InsightResponse:
     """
     Extract insights from document chunk.
-    
+
     Args:
         request: FastAPI request object
         request_data: Insight extraction request
-    
+
     Returns:
         Insight response with extracted facts
     """
     if runtime_services is None:
         logger.error("[INSIGHTS] Runtime services unavailable")
         raise HTTPException(status_code=503, detail="runtime_services_unavailable")
-    
+
     request_start = time.time()
     logger.info(
         "[INSIGHTS] Request received | client=%s | query_len=%d | chunk_len=%d",
@@ -581,7 +582,7 @@ def extract_insights(request: Request, request_data: InsightRequest) -> InsightR
         len(request_data.query),
         len(request_data.chunk),
     )
-    
+
     try:
         insights = runtime_services.insights.extract_insights(
             query=request_data.query,
@@ -612,41 +613,41 @@ def extract_insights(request: Request, request_data: InsightRequest) -> InsightR
 def get_config(request: Request) -> ConfigResponse:
     """
     Get current provider and model configuration.
-    
+
     Args:
         request: FastAPI request object
-        
+
     Returns:
         Current configuration
     """
-    logger.info("[CONFIG] Get config request received | client=%s", 
+    logger.info("[CONFIG] Get config request received | client=%s",
                request.client.host if request.client else "unknown")
-    
-    # Get current environment variables for model configurations
+
+    # Get current configuration for model configurations
     config_data = {
         "models": {
             "evaluator": {
-                "provider": os.getenv("AGENT_EVALUATOR_PROVIDER", "ollama"),
-                "model": os.getenv("AGENT_EVALUATOR_MODEL", "deepseek-r1:8b"),
-                "temperature": float(os.getenv("AGENT_EVALUATOR_TEMPERATURE", 0.7)),
-                "max_tokens": int(os.getenv("AGENT_EVALUATOR_MAX_TOKENS", 2048))
+                "provider": config.get("models.evaluator.provider", "ollama"),
+                "model": config.get("models.evaluator.model", "deepseek-r1:8b"),
+                "temperature": float(config.get("models.evaluator.temperature", 0.7)),
+                "max_tokens": int(config.get("models.evaluator.max_tokens", 2048))
             },
             "planner": {
-                "provider": os.getenv("AGENT_PLANNER_PROVIDER", "ollama"),
-                "model": os.getenv("AGENT_PLANNER_MODEL", "deepseek-r1:8b"),
-                "temperature": float(os.getenv("AGENT_PLANNER_TEMPERATURE", 0.7)),
-                "max_tokens": int(os.getenv("AGENT_PLANNER_MAX_TOKENS", 2048))
+                "provider": config.get("models.planner.provider", "ollama"),
+                "model": config.get("models.planner.model", "deepseek-r1:8b"),
+                "temperature": float(config.get("models.planner.temperature", 0.7)),
+                "max_tokens": int(config.get("models.planner.max_tokens", 2048))
             },
             "domain_critic": {
-                "provider": os.getenv("AGENT_DOMAIN_CRITIC_PROVIDER", "openrouter"),
-                "model": os.getenv("AGENT_DOMAIN_CRITIC_MODEL", "meta-llama/llama-3.1-70b-instruct:free"),
-                "temperature": float(os.getenv("AGENT_DOMAIN_CRITIC_TEMPERATURE", 0.7)),
-                "max_tokens": int(os.getenv("AGENT_DOMAIN_CRITIC_MAX_TOKENS", 2048))
+                "provider": config.get("models.domain_critic.provider", "openrouter"),
+                "model": config.get("models.domain_critic.model", "meta-llama/llama-3.1-70b-instruct:free"),
+                "temperature": float(config.get("models.domain_critic.temperature", 0.7)),
+                "max_tokens": int(config.get("models.domain_critic.max_tokens", 2048))
             }
         },
-        "fallback_chain": os.getenv("AGENT_FALLBACK_CHAIN", "ollama,openrouter").split(",")
+        "fallback_chain": config.get("system.extra_config.fallback_chain", "ollama,openrouter").split(",")
     }
-    
+
     return ConfigResponse(config=ProviderConfig(**config_data))
 
 
@@ -654,45 +655,21 @@ def get_config(request: Request) -> ConfigResponse:
 def update_config(request: Request, config_data: ConfigUpdateRequest) -> dict:
     """
     Update provider and model configuration.
-    
+
     Args:
         request: FastAPI request object
         config_data: New configuration data
-        
+
     Returns:
         Status of configuration update
     """
-    logger.info("[CONFIG] Update config request received | client=%s", 
+    logger.info("[CONFIG] Update config request received | client=%s",
                request.client.host if request.client else "unknown")
-    
-    try:
-        # Update environment variables for model configurations
-        for model_name, model_config in config_data.models.items():
-            # Set environment variables for each model configuration
-            provider_key = f"AGENT_{model_name.upper()}_PROVIDER"
-            model_key = f"AGENT_{model_name.upper()}_MODEL"
-            
-            os.environ[provider_key] = model_config.provider
-            os.environ[model_key] = model_config.model
-            
-            # For each model type, update the specific configuration
-            if model_name == "evaluator":
-                os.environ["AGENT_EVALUATOR_PROVIDER"] = model_config.provider
-                os.environ["AGENT_EVALUATOR_MODEL"] = model_config.model
-            elif model_name == "planner":
-                os.environ["AGENT_PLANNER_PROVIDER"] = model_config.provider
-                os.environ["AGENT_PLANNER_MODEL"] = model_config.model
-            elif model_name == "domain_critic":
-                os.environ["AGENT_DOMAIN_CRITIC_PROVIDER"] = model_config.provider
-                os.environ["AGENT_DOMAIN_CRITIC_MODEL"] = model_config.model
-        
-        # Update fallback chain
-        if config_data.fallback_chain:
-            os.environ["AGENT_FALLBACK_CHAIN"] = ",".join(config_data.fallback_chain)
-        
-        logger.info("[CONFIG] Configuration updated successfully")
-        return {"status": "success", "message": "Configuration updated successfully"}
-        
-    except Exception as exc:
-        logger.error("[CONFIG] Failed to update configuration: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Failed to update configuration: {exc}")
+
+    # Note: In a real implementation, we would send this to the config service
+    # For now, we'll just log that the update was requested
+    logger.info("[CONFIG] Configuration update requested: %s", config_data)
+    logger.info("[CONFIG] In a production implementation, this would update the centralized config service")
+
+    logger.info("[CONFIG] Configuration update request processed (mock implementation)")
+    return {"status": "success", "message": "Configuration update request received (mock implementation)"}
